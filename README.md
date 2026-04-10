@@ -1,14 +1,15 @@
 # Hand Sign Recognition
 
-A real-time hand sign detection and classification system using Python, OpenCV, and MediaPipe.
+A real-time hand sign detection and translation system using Python, OpenCV, and MediaPipe.
 
 ## Project Overview
-This project provides a complete pipeline for building a hand sign dataset and using it for real-time classification. It uses `cvzone`'s Hand Tracking and Classification modules, built on top of MediaPipe and TensorFlow.
+This project is evolving from static image classification to a high-performance **Landmark-based** recognition system. By capturing hand joint coordinates instead of raw images, the system is lighter, faster, and ready for advanced sequence modeling (LSTM).
 
 ## Features
-- **Data Collection**: Capture hand sign images with automatic cropping and resizing to a uniform 300x300 format.
-- **Hand Tracking**: Real-time multi-hand tracking with skeletal visualization.
-- **Classification**: Real-time sign classification using a trained deep learning model.
+- **Landmark Extraction**: Uses MediaPipe to capture the (x, y, z) coordinates of 21 hand joints.
+- **Advanced Logging**: Color-coded console logs with clickable file links for easier debugging.
+- **Static & Sequence Collection**: Support for both single-post capture and motion-sequence recording.
+- **Visual Verification**: Built-in tools to replay and inspect collected landmark data.
 
 ## Installation
 
@@ -31,40 +32,49 @@ This project provides a complete pipeline for building a hand sign dataset and u
 
 3. Install requirements:
    ```bash
-   pip install opencv-python cvzone mediapipe tensorflow
+   pip install opencv-python cvzone mediapipe tensorflow numpy
    ```
 
 ## Usage
 
-### 1. Capture Dataset
-Use `sign_dataset_capture.py` to collect images for each hand sign class.
-- Run the script: `python sign_dataset_capture.py`
-- Position your hand in the camera view.
-- Press **'s'** to save the processed crop of your hand to the `Data/C` folder.
-- Press **'q'** to exit.
+### 1. Collect Static Signs (Letters)
+Use `sign_dataset_capture.py` to collect landmark data for static hand poses.
+- Run: `python sign_dataset_capture.py`
+- Press **'s'** to save the current hand landmarks to `Data/C/` as a `.npy` file.
 
-> [!NOTE] 
-> You can change the target folder for different signs by modifying the `folder` variable in `sign_dataset_capture.py`.
+### 2. Collect Dynamic Sequences (Phrases)
+Use `collect_landmarks.py` to record motion sequences (Phase 1 of the Roadmap).
+- Run: `python collect_landmarks.py`
+- Press **'s'** to record a **30-frame sequence** (approx. 1 second of motion).
+- Files are saved in `Data/Landmarks/`.
 
-### 2. Train Your Model
-After collecting enough data (e.g., 300+ images per class):
-1. Go to [Teachable Machine](https://teachablemachine.withgoogle.com/train/image).
-2. Upload your captured images for each class.
-3. Train the model and export it as a **TensorFlow / Keras** model.
-4. Place `keras_model.h5` and `labels.txt` inside a folder named `Model/`.
+### 3. Verify Your Data
+Before training, use the verification scripts to check your data quality:
 
-### 3. Run Recognition
-Use `sign_detector.py` to detect signs in real-time.
-- Run the script: `python sign_detector.py`
-- The script will display the predicted label above your hand.
-- Press **'q'** to exit.
+- **Numerical Preview**:
+  ```bash
+  python preview_npy.py <path_to_file.npy>
+  ```
+- **Visual Animation**:
+  ```bash
+  python visualize_landmarks.py <path_to_file.npy>
+  ```
+
+## Project Roadmap
+See [ROADMAP.md](ROADMAP.md) for the detailed path toward full sentence translation, including:
+- **Phase 1**: Landmark Collection (Status: Active)
+- **Phase 2**: Sequence Modeling (LSTM)
+- **Phase 3**: NLP Sentence Reconstruction
+- **Phase 4**: Holistic Body/Face Tracking
 
 ## Project Structure
-- `sign_dataset_capture.py`: Script for collecting training data.
-- `sign_detector.py`: Script for real-time recognition.
-- `Data/`: Folder containing the captured image datasets.
-- `Model/`: Folder containing the trained `.h5` model and `labels.txt`.
+- `sign_dataset_capture.py`: Captures static landmarks.
+- `collect_landmarks.py`: Captures motion sequences.
+- `visualize_landmarks.py`: Animates and plays back captured data.
+- `preview_npy.py`: Shows numerical data info.
+- `utils/logger_config.py`: Advanced logging configuration.
+- `Data/`: Folder containing the `.npy` datasets.
 
 ## Acknowledgments
-- [cvzone](https://github.com/cvzone/cvzone) for the simplified hand tracking wrappers.
-- [MediaPipe](https://mediapipe.dev/) for the underlying hand tracking technology.
+- [cvzone](https://github.com/cvzone/cvzone) for simplified hand tracking.
+- [MediaPipe](https://mediapipe.dev/) for coordinate extraction.

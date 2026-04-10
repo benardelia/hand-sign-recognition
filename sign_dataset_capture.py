@@ -4,6 +4,10 @@ import numpy as np
 import math
 import time
 import os
+from utils.logger_config import setup_logger
+
+# Initialize Logger
+logger = setup_logger(__name__)
 
 # Initialize Webcam
 # 0 is usually the default internal camera
@@ -89,9 +93,19 @@ while True:
     if key == ord("q"):
         break
     
-    # Press 's' to save the current 'imgWhite' to the folder
+    # Press 's' to save the current hand landmarks to the folder
     if key == ord("s"):
-        counter += 1
-        # Save image with a unique timestamp to avoid overwriting
-        cv2.imwrite(f'{folder}/Image_{time.time()}.jpg', imgWhite)
-        print(f"Saved image {counter}")
+        if hands:
+            hand = hands[0]
+            lmList = hand['lmList']
+            # Flatten to 1D array (63 values)
+            landmarks = np.array(lmList).flatten()
+            
+            timestamp = int(time.time() * 1000)
+            file_path = f'{folder}/static_{timestamp}.npy'
+            np.save(file_path, landmarks)
+            
+            counter += 1
+            logger.info(f"Saved landmarks to {file_path} (Count: {counter})")
+        else:
+            logger.warning("No hand detected! Cannot save.")

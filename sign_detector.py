@@ -3,6 +3,10 @@ from cvzone.HandTrackingModule import HandDetector
 from cvzone.ClassificationModule import Classifier
 import numpy as np
 import math
+from utils.logger_config import setup_logger
+
+# Initialize Logger
+logger = setup_logger(__name__)
 
 # Initialize Webcam
 cap = cv2.VideoCapture(0)
@@ -67,7 +71,7 @@ while True:
             
             # Get prediction using the square 'imgWhite'
             prediction, index = classifier.getPrediction(imgWhite, draw=False)
-            print(f"Prediction: {prediction}, Index: {index}")
+            logger.info(f"Prediction: {prediction}, Index: {index}")
 
         else:
             # Horizontal hand: Width is longer
