@@ -9,7 +9,18 @@ logger = setup_logger(__name__)
 
 def draw_skeleton(img, landmarks):
     """Utility to draw custom hand skeleton connections."""
-    # connections are for a 21-point MediaPipe hand
+    
+    # Detect if data is normalized (small values near 0)
+    is_normalized = np.max(np.abs(landmarks)) < 10
+    
+    display_lms = landmarks.copy()
+    if is_normalized:
+        # Scale up and move to the center of the 1000x800 canvas
+        scale = 300
+        offset_x, offset_y = 500, 400
+        display_lms[:, 0] = display_lms[:, 0] * scale + offset_x
+        display_lms[:, 1] = display_lms[:, 1] * scale + offset_y
+    
     connections = [
         (0, 1), (1, 2), (2, 3), (3, 4), # Thumb
         (0, 5), (5, 6), (6, 7), (7, 8), # Index
@@ -17,13 +28,15 @@ def draw_skeleton(img, landmarks):
         (9, 13), (13, 14), (14, 15), (15, 16), # Ring
         (13, 17), (17, 18), (18, 19), (19, 20), (0, 17) # Pinky & Palm
     ]
+    
     # Draw lines
     for start, end in connections:
-        p1 = (int(landmarks[start][0]), int(landmarks[start][1]))
-        p2 = (int(landmarks[end][0]), int(landmarks[end][1]))
+        p1 = (int(display_lms[start][0]), int(display_lms[start][1]))
+        p2 = (int(display_lms[end][0]), int(display_lms[end][1]))
         cv2.line(img, p1, p2, (255, 255, 255), 2)
+        
     # Draw joints
-    for lm in landmarks:
+    for lm in display_lms:
         cv2.circle(img, (int(lm[0]), int(lm[1])), 6, (0, 255, 0), cv2.FILLED)
 
 def visualize(file_path):
@@ -35,9 +48,6 @@ def visualize(file_path):
         data = np.load(file_path)
         logger.info(f"Visualizing: {os.path.basename(file_path)}")
 
-        # Normalization of data for display
-        # If the file is static, data.shape will be (63,)
-        # If it's a sequence, data.shape will be (N, 63)
         if data.ndim == 1:
             frames = [data.reshape(21, 3)]
             mode = "Static"
@@ -48,20 +58,15 @@ def visualize(file_path):
         window_name = f"Visualization - {mode}"
         cv2.namedWindow(window_name)
 
-        # Loop logic
         loops = 3 if mode == "Sequence" else 1
         for loop in range(loops):
             if mode == "Sequence":
                 logger.info(f"Loop {loop + 1}/{loops}...")
             
             for i, landmarks in enumerate(frames):
-                # Create a blank canvas
                 img = np.zeros((800, 1000, 3), np.uint8)
-                
-                # Draw the hand
                 draw_skeleton(img, landmarks)
 
-                # Add Text Information
                 cv2.putText(img, f"Mode: {mode}", (20, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 cv2.putText(img, f"File: {os.path.basename(file_path)}", (20, 60), 
@@ -72,8 +77,6 @@ def visualize(file_path):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
 
                 cv2.imshow(window_name, img)
-                
-                # Speed control: Sequences play at ~20fps, static stays visible
                 wait_time = 50 if mode == "Sequence" else 0
                 key = cv2.waitKey(wait_time)
                 if key & 0xFF == ord('q'): return

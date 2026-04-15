@@ -14,30 +14,34 @@ def preview(file_path):
         data = np.load(file_path)
         logger.info(f"Successfully loaded: {os.path.basename(file_path)}")
         
-        # Handle different data shapes (Static vs Sequence)
+        # Detect Shape
         if data.ndim == 1:
             data_type = "Static (Single Frame)"
             num_frames = 1
             num_coords = data.shape[0]
+            max_val = np.max(np.abs(data))
         else:
             data_type = "Sequence"
             num_frames = data.shape[0]
             num_coords = data.shape[1]
+            max_val = np.max(np.abs(data))
+
+        # Detect Normalization
+        # Raw pixel values are usually 100-1000+, normalized are ~0-2.
+        is_normalized = max_val < 5
 
         print("\n" + "="*50)
         print(f"FILE INFO:")
         print(f" - Type: {data_type}")
+        print(f" - Status: {'[Normalized]' if is_normalized else '[Raw / Unnormalized]'}")
         print(f" - Shape: {data.shape}")
         print(f" - Frames: {num_frames}")
-        print(f" - Coordinates per frame: {num_coords}")
         
         print("\nDATA PREVIEW:")
         if data_type == "Static (Single Frame)":
-            print(f" First 10 values: {data[:10]}")
+            print(f" First 6 values: {data[:6]}")
         else:
-            print(f" Frame 1 (First 10 values): {data[0, :10]}")
-            if num_frames > 1:
-                print(f" Frame {num_frames} (First 10 values): {data[-1, :10]}")
+            print(f" Frame 1 (First 6 values): {data[0, :6]}")
         
         print("="*50 + "\n")
         

@@ -4,6 +4,7 @@ import numpy as np
 import os
 import time
 from utils.logger_config import setup_logger
+from utils.normalization import normalize_landmarks
 
 # Initialize Logger
 logger = setup_logger(__name__)
@@ -60,10 +61,8 @@ while True:
             
             if hands:
                 hand = hands[0]
-                lmList = hand['lmList'] # 21 landmarks [x, y, z]
-                
-                # Flatten the list of landmarks into a single 1D array (21*3 = 63 values)
-                landmarks = np.array(lmList).flatten()
+                # Normalize landmarks (translation and scaling)
+                landmarks = normalize_landmarks(lmList)
                 sequence.append(landmarks)
                 count += 1
             

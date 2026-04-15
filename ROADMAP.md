@@ -2,23 +2,11 @@
 
 This document outlines the architectural path to evolve this project from a static letter recognizer to a real-time sign language translator.
 
-## Phase 1: Landmark Extraction (Performance & Scalability)
-*Current State:* The system saves 300x300 pixel images.
-*Limitation:* Images are large, slow to process, and contain irrelevant background data.
+## Phase 1: Landmark Extraction (COMPLETED)
+*Status:* Switched from image saves to coordinate (.npy) saves. Verified via visualization tools.
 
-**The Move:**
-- Transition to saving **Landmark Coordinates** (21 points per hand, each with X, Y, Z).
-- Save data as `.npy` (NumPy) or `.csv` files.
-- **Goal:** Reduce data footprint by 99% and increase training speed.
-
-## Phase 2: Temporal Sequence Modeling (Dynamic Signs)
-*Current State:* The system recognizes static shapes (e.g., 'A', 'B', 'C').
-*Limitation:* Real sign language involves motion (e.g., "Hello", "Thank you").
-
-**The Move:**
-- Collect **Sequences** of frames (e.g., 30 frames per gesture).
-- Implement an **LSTM (Long Short-Term Memory)** or **GRU** neural network.
-- **Goal:** Enable the model to understand "motion" and recognize full signed words.
+## Phase 2: Temporal Sequence Modeling (ACTIVE)
+*Status:* Created `train_model.py`. Now using an LSTM architecture to learn patterns across 30-frame sequences.
 
 ## Phase 3: Sentence Reconstruction (NLP)
 *Current State:* Predicts one label at a time.

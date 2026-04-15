@@ -16,7 +16,7 @@ detector = HandDetector(maxHands=1)
 
 # Initialize Classifier with the trained TensorFlow Keras model
 # Ensure 'Model/keras_model.h5' and 'Model/labels.txt' exist in the 'Model' folder
-classifier = Classifier("Model/keras_model.h5", "Model/labels.txt")
+classifier = Classifier("Model/hand_model.h5", "Model/labels.txt")
 
 # Configuration variables
 offset = 40      # Extra space to crop around the hand

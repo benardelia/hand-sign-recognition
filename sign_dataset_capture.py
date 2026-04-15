@@ -5,6 +5,7 @@ import math
 import time
 import os
 from utils.logger_config import setup_logger
+from utils.normalization import normalize_landmarks
 
 # Initialize Logger
 logger = setup_logger(__name__)
@@ -20,12 +21,14 @@ detector = HandDetector(maxHands=2)
 # Configuration variables
 offset = 40      # Extra space to crop around the hand
 imgSize = 300    # Final size of the square image (300x300)
-folder = "Data/C" # Directory where images will be saved
-counter = 0      # Counter for saved images
+folder = "Data/Static" # Directory where static landmarks will be saved
+label = "D"           # Current sign label
+counter = 0           # Counter for saved files
 
-# Ensure the directory exists
-if not os.path.exists(folder):
-    os.makedirs(folder)
+# Ensure the label directory exists
+target_dir = os.path.join(folder, label)
+if not os.path.exists(target_dir):
+    os.makedirs(target_dir)
 
 while True:
     # Capture frame-by-frame from webcam
@@ -91,18 +94,17 @@ while True:
     
     # Press 'q' to quit
     if key == ord("q"):
+        logger.info('quiting application ....')
         break
     
     # Press 's' to save the current hand landmarks to the folder
     if key == ord("s"):
         if hands:
-            hand = hands[0]
-            lmList = hand['lmList']
-            # Flatten to 1D array (63 values)
-            landmarks = np.array(lmList).flatten()
+            # Use normalization to make data position-invariant
+            landmarks = normalize_landmarks(lmList)
             
             timestamp = int(time.time() * 1000)
-            file_path = f'{folder}/static_{timestamp}.npy'
+            file_path = os.path.join(target_dir, f"static_{timestamp}.npy")
             np.save(file_path, landmarks)
             
             counter += 1
