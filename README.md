@@ -3,13 +3,14 @@
 A real-time hand sign detection and translation system using Python, OpenCV, and MediaPipe.
 
 ## Project Overview
-This project is a high-performance **Landmark-based** recognition system. By extracting hand joint coordinates instead of raw images, the system is lightweight, fast, and capable of recognizing both static signs (letters) and dynamic gestures (whole words/phrases) using an LSTM neural network.
+This project is a high-performance **Landmark-based** recognition system. By extracting hand joint coordinates instead of raw images, the system is lightweight, fast, and capable of translating both static signs (letters) and dynamic gestures into full, natural English sentences using an LSTM neural network.
 
 ## Features
 - **Landmark Extraction**: Uses MediaPipe to capture the (x, y, z) coordinates of 21 hand joints.
 - **Motion Recognition**: Employs an **LSTM (Long Short-Term Memory)** network to understand gestures over time.
+- **Smart Sentence Reconstruction**: Automatically strings together detected keywords into grammatically correct English sentences.
 - **Advanced Logging**: Color-coded console logs with clickable file links for easier debugging.
-- **Real-time Translation**: Live webcam feed with overhead predictions and confidence levels.
+- **Real-time Translation**: Live webcam feed with overhead predictions and a sentence display bar.
 - **Visual Verification**: Built-in tools to replay and inspect collected landmark data.
 
 ## Installation
@@ -49,7 +50,7 @@ Check your data quality before training:
 - **Skeletal Animation**: `python visualize_landmarks.py <path_to_file.npy>`
 
 ### 3. Training
-Train your custom LSTM model once you have collected enough data (recommended 30+ samples per sign):
+Train your custom LSTM model. The trainer automatically applies **Landmark Normalization** and **Data Augmentation** to improve accuracy:
 ```bash
 python train_model.py
 ```
@@ -60,22 +61,27 @@ Run the translation system to see the AI in action:
 ```bash
 python realtime_inference.py
 ```
+- **Interact**: Press **'C'** to clear the current sentence and start fresh.
+- **Quit**: Press **'Q'** to exit the application.
 
 ## Project Roadmap
-See [ROADMAP.md](ROADMAP.md) for the detailed path toward full sentence translation, including:
-- **Phase 1**: Landmark Collection (Status: Completed)
-- **Phase 2**: Sequence Modeling (Status: Active)
-- **Phase 3**: NLP Sentence Reconstruction
-- **Phase 4**: Holistic Body/Face Tracking
+See [ROADMAP.md](ROADMAP.md) for the detailed path:
+- **Phase 1**: Landmark Collection (COMPLETED)
+- **Phase 2**: Sequence Modeling (COMPLETED)
+- **Phase 3**: Sentence Reconstruction (COMPLETED)
+- **Phase 4**: Holistic Body/Face Tracking (ACTIVE)
 
 ## Project Structure
 - `sign_dataset_capture.py`: Captures static landmarks.
 - `collect_landmarks.py`: Captures motion sequences.
 - `train_model.py`: Trains the LSTM neural network.
-- `realtime_inference.py`: Live translation script.
+- `realtime_inference.py`: Live translation script with sentence reconstruction.
 - `visualize_landmarks.py`: Animates and plays back captured data.
 - `preview_npy.py`: Shows numerical data info.
-- `utils/logger_config.py`: Advanced logging configuration.
+- `utils/`:
+    - `logger_config.py`: Advanced logging configuration.
+    - `normalization.py`: Landmark translation and scaling logic.
+    - `translator.py`: Gloss-to-Text sentence reconstruction.
 - `Data/`: Folder containing the `.npy` datasets.
 - `Model/`: Folder containing the trained model and labels.
 

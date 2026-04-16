@@ -14,7 +14,7 @@ def normalize_landmarks(lmList):
     if isinstance(lmList, np.ndarray) and lmList.shape == (63,):
         lmList = lmList.reshape(21, 3)
     
-    if not lmList or len(lmList) != 21:
+    if lmList is None or len(lmList) != 21:
         return np.zeros(63)
 
     # 1. Translation: Move wrist (index 0) to (0,0,0)
