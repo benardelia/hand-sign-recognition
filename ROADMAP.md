@@ -8,23 +8,12 @@ This document outlines the architectural path to evolve this project from a stat
 ## Phase 2: Temporal Sequence Modeling (ACTIVE)
 *Status:* Created `train_model.py`. Now using an LSTM architecture to learn patterns across 30-frame sequences.
 
-## Phase 3: Sentence Reconstruction (NLP)
-*Current State:* Predicts one label at a time.
-*Limitation:* Sign language grammar (Glosses) differs from spoken English.
+## Phase 3: Sentence Reconstruction (COMPLETED)
+*Status:* Implemented a word debouncer, sentence buffer, and a Gloss-to-Text translator utility.
 
-**The Move:**
-- Integrate a **Gloss-to-Text** transformer (e.g., T5 or a lightweight LLM).
-- Map a sequence of detected signs (e.g., `[STORE, GO, I]`) to a natural sentence (`"I am going to the store."`).
-- **Goal:** Produce human-readable, grammatically correct translations.
+## Phase 4: Holistic Body/Face Tracking (ACTIVE)
+*Status:* Researching MediaPipe Holistic integration to capture emotional context and full-body signs.
 
-## Phase 4: Holistic Tracking (Contextual Signs)
-*Current State:* Tracks hands only.
-*Limitation:* Some signs depend on facial expressions or body posture.
-
-**The Move:**
-- Upgrade to `MediaPipe Holistic`.
-- Incorporate **Face Mesh** and **Pose** landmarks into the training data.
-- **Goal:** Improve accuracy for advanced signs that rely on non-manual markers.
 
 ---
 
