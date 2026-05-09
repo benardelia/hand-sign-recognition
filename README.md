@@ -3,10 +3,10 @@
 A real-time hand sign detection and translation system using Python, OpenCV, and MediaPipe.
 
 ## Project Overview
-This project is a high-performance **Landmark-based** recognition system. By extracting hand joint coordinates instead of raw images, the system is lightweight, fast, and capable of translating both static signs (letters) and dynamic gestures into full, natural English sentences using an LSTM neural network.
+This project is a high-performance **Landmark-based** recognition system. It has evolved from simple hand tracking to a full **Holistic** system that extracts coordinates for the face, body (pose), and both hands. This allows the AI to recognize complex signs that rely on facial expressions and body posture, translating them into natural English sentences.
 
 ## Features
-- **Landmark Extraction**: Uses MediaPipe to capture the (x, y, z) coordinates of 21 hand joints.
+- **Holistic Tracking**: Uses MediaPipe Holistic to capture 1662 landmarks (Face Mesh, Pose, and Both Hands).
 - **Motion Recognition**: Employs an **LSTM (Long Short-Term Memory)** network to understand gestures over time.
 - **Smart Sentence Reconstruction**: Automatically strings together detected keywords into grammatically correct English sentences.
 - **Advanced Logging**: Color-coded console logs with clickable file links for easier debugging.
@@ -41,8 +41,8 @@ This project is a high-performance **Landmark-based** recognition system. By ext
 
 ### 1. Data Collection
 Collect data for each sign you want the AI to learn:
-- **Static Signs (Letters)**: Run `python sign_dataset_capture.py` and press **'s'** to save a single frame.
-- **Dynamic Phrases (Motion)**: Run `python collect_landmarks.py` and press **'s'** to record a 30-frame sequence.
+- **Hand-Only (Legacy)**: Run `python sign_dataset_capture.py` (static) or `python collect_landmarks.py` (motion).
+- **Holistic Tracking (Advanced)**: Run `python collect_holistic.py`. Press **'s'** to record a 30-frame sequence including your face, pose, and hands.
 
 ### 2. Verification
 Check your data quality before training:
@@ -50,7 +50,7 @@ Check your data quality before training:
 - **Skeletal Animation**: `python visualize_landmarks.py <path_to_file.npy>`
 
 ### 3. Training
-Train your custom LSTM model. The trainer automatically applies **Landmark Normalization** and **Data Augmentation** to improve accuracy:
+Train your custom LSTM model. The trainer dynamically detects if you are using Hand-Only (63 features) or Holistic (1662 features) data:
 ```bash
 python train_model.py
 ```
@@ -58,33 +58,35 @@ This will generate `hand_model.h5` and `labels.txt` in the `Model/` folder.
 
 ### 4. Real-time Translation
 Run the translation system to see the AI in action:
-```bash
-python realtime_inference.py
-```
-- **Interact**: Press **'C'** to clear the current sentence and start fresh.
-- **Quit**: Press **'Q'** to exit the application.
+- **Hand-Only**: `python realtime_inference.py`
+- **Holistic**: `python realtime_holistic.py`
+
+**Controls:**
+- **'C'**: Clear the current sentence.
+- **'Q'**: Quit the application.
 
 ## Project Roadmap
-See [ROADMAP.md](ROADMAP.md) for the detailed path:
+See [ROADMAP.md](ROADMAP.md) for details:
 - **Phase 1**: Landmark Collection (COMPLETED)
 - **Phase 2**: Sequence Modeling (COMPLETED)
 - **Phase 3**: Sentence Reconstruction (COMPLETED)
-- **Phase 4**: Holistic Body/Face Tracking (ACTIVE)
+- **Phase 4**: Holistic Body/Face Tracking (COMPLETED)
 
 ## Project Structure
-- `sign_dataset_capture.py`: Captures static landmarks.
-- `collect_landmarks.py`: Captures motion sequences.
-- `train_model.py`: Trains the LSTM neural network.
-- `realtime_inference.py`: Live translation script with sentence reconstruction.
-- `visualize_landmarks.py`: Animates and plays back captured data.
-- `preview_npy.py`: Shows numerical data info.
+- `collect_holistic.py`: Captures full-body holistic sequences (Phase 4).
+- `realtime_holistic.py`: Live holistic translation script (Phase 4).
+- `sign_dataset_capture.py`: Captures static hand landmarks (Legacy).
+- `collect_landmarks.py`: Captures hand motion sequences (Legacy).
+- `train_model.py`: Trains the LSTM network (Supports both Hand and Holistic).
+- `realtime_inference.py`: Live hand-only translation (Legacy).
 - `utils/`:
-    - `logger_config.py`: Advanced logging configuration.
-    - `normalization.py`: Landmark translation and scaling logic.
+    - `holistic_utils.py`: Logic for extracting 1662 holistic data points.
+    - `normalization.py`: Hand-only translation and scaling logic.
     - `translator.py`: Gloss-to-Text sentence reconstruction.
-- `Data/`: Folder containing the `.npy` datasets.
-- `Model/`: Folder containing the trained model and labels.
+    - `logger_config.py`: Advanced logging configuration.
+- `Data/`: Folder containing `.npy` datasets.
+- `Model/`: Folder containing trained models and labels.
 
 ## Acknowledgments
-- [cvzone](https://github.com/cvzone/cvzone) for simplified hand tracking.
-- [MediaPipe](https://mediapipe.dev/) for coordinate extraction.
+- [cvzone](https://github.com/cvzone/cvzone) for simplified tracking utilities.
+- [MediaPipe](https://mediapipe.dev/) for state-of-the-art coordinate extraction.

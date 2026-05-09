@@ -12,41 +12,46 @@ logger = setup_logger(__name__)
 
 # --- CONFIGURATION ---
 DATA_PATH = os.path.join('Data', 'Landmarks') 
+HOLISTIC_DATA_PATH = os.path.join('Data', 'Holistic_Landmarks')
 STATIC_PATH = os.path.join('Data', 'Static')   
 MODELS_PATH = 'Model'
 SEQUENCE_LENGTH = 30 
-NUM_LANDMARKS = 21
-NUM_COORDS = 3
-INPUT_SHAPE = (SEQUENCE_LENGTH, NUM_LANDMARKS * NUM_COORDS)
+# INPUT_SHAPE will be determined dynamically
 
 if not os.path.exists(MODELS_PATH):
     os.makedirs(MODELS_PATH)
 
 def process_sample(res, is_sequence=True):
     """
-    Normalizes a sample and creates an augmented (flipped) version.
-    Returns: List of processed sequences.
+    Normalizes a sample and creates an augmented (flipped) version for 63-shape hand data.
+    Passes through holistic (1662) data without the hand-specific normalization.
     """
     processed = []
     
+    # Check if holistic data
+    is_holistic = res.shape[-1] == 1662
+    
     if is_sequence:
-        # Normalize every frame in the sequence
-        norm_seq = np.array([normalize_landmarks(frame) for frame in res])
-        processed.append(norm_seq)
-        
-        # Augmentation: Horizontal Flip
-        flip_seq = np.array([flip_landmarks(frame) for frame in norm_seq])
-        processed.append(flip_seq)
+        if is_holistic:
+            processed.append(res)
+            # Add simple flip for holistic if needed later, but skip for now
+        else:
+            norm_seq = np.array([normalize_landmarks(frame) for frame in res])
+            processed.append(norm_seq)
+            flip_seq = np.array([flip_landmarks(frame) for frame in norm_seq])
+            processed.append(flip_seq)
     else:
-        # Static: Normalize, then repeat to 30 frames
-        norm_frame = normalize_landmarks(res)
-        norm_seq = np.tile(norm_frame, (SEQUENCE_LENGTH, 1))
-        processed.append(norm_seq)
-        
-        # Static Augmentation: Flip
-        flip_frame = flip_landmarks(norm_frame)
-        flip_seq = np.tile(flip_frame, (SEQUENCE_LENGTH, 1))
-        processed.append(flip_seq)
+        if is_holistic:
+            # Static holistic not supported yet, just pass through repeated
+            seq = np.tile(res, (SEQUENCE_LENGTH, 1))
+            processed.append(seq)
+        else:
+            norm_frame = normalize_landmarks(res)
+            norm_seq = np.tile(norm_frame, (SEQUENCE_LENGTH, 1))
+            processed.append(norm_seq)
+            flip_frame = flip_landmarks(norm_frame)
+            flip_seq = np.tile(flip_frame, (SEQUENCE_LENGTH, 1))
+            processed.append(flip_seq)
         
     return processed
 
@@ -57,6 +62,8 @@ def load_data():
     # 1. Detect all labels
     if os.path.exists(DATA_PATH):
         all_labels += [d for d in os.listdir(DATA_PATH) if os.path.isdir(os.path.join(DATA_PATH, d))]
+    if os.path.exists(HOLISTIC_DATA_PATH):
+        all_labels += [d for d in os.listdir(HOLISTIC_DATA_PATH) if d not in all_labels and os.path.isdir(os.path.join(HOLISTIC_DATA_PATH, d))]
     if os.path.exists(STATIC_PATH):
         all_labels += [d for d in os.listdir(STATIC_PATH) if d not in all_labels and os.path.isdir(os.path.join(STATIC_PATH, d))]
     
@@ -64,31 +71,45 @@ def load_data():
     label_map = {label: i for i, label in enumerate(all_labels)}
     logger.info(f"Detected Labels: {all_labels}")
     
-    # 2. Load Sequence Data
-    if os.path.exists(DATA_PATH):
+    input_shape = None
+    
+    # Helper to process and append
+    def add_files_from_path(data_path, is_seq=True):
+        nonlocal input_shape
+        if not os.path.exists(data_path): return
         for label in all_labels:
-            path = os.path.join(DATA_PATH, label)
+            path = os.path.join(data_path, label)
             if not os.path.exists(path): continue
             files = [f for f in os.listdir(path) if f.endswith('.npy')]
             for file in files:
                 res = np.load(os.path.join(path, file))
-                if res.shape == INPUT_SHAPE:
-                    for s in process_sample(res, is_sequence=True):
-                        sequences.append(s)
-                        labels.append(label_map[label])
+                
+                # Determine input shape from the first valid file
+                if input_shape is None:
+                    if is_seq:
+                        input_shape = (SEQUENCE_LENGTH, res.shape[-1])
+                    else:
+                        input_shape = (SEQUENCE_LENGTH, res.shape[0])
+                
+                # Filter by expected sequence length if it's sequence data
+                if is_seq and res.shape[0] != SEQUENCE_LENGTH:
+                    continue
+                # Also filter by expected feature size
+                if (is_seq and res.shape[-1] != input_shape[-1]) or (not is_seq and res.shape[0] != input_shape[-1]):
+                    continue
+
+                for s in process_sample(res, is_sequence=is_seq):
+                    sequences.append(s)
+                    labels.append(label_map[label])
+
+    # 2. Load Sequence Data
+    add_files_from_path(HOLISTIC_DATA_PATH, is_seq=True)
+    if input_shape is None:
+        add_files_from_path(DATA_PATH, is_seq=True)
 
     # 3. Load Static Data
-    if os.path.exists(STATIC_PATH):
-        for label in all_labels:
-            path = os.path.join(STATIC_PATH, label)
-            if not os.path.exists(path): continue
-            files = [f for f in os.listdir(path) if f.endswith('.npy')]
-            for file in files:
-                res = np.load(os.path.join(path, file))
-                if res.shape == (63,):
-                    for s in process_sample(res, is_sequence=False):
-                        sequences.append(s)
-                        labels.append(label_map[label])
+    # 3. Load Static Data
+    add_files_from_path(STATIC_PATH, is_seq=False)
 
     X = np.array(sequences)
     y = to_categorical(labels).astype(int)
@@ -96,12 +117,11 @@ def load_data():
     with open(os.path.join(MODELS_PATH, 'labels.txt'), 'w') as f:
         f.write("\n".join(all_labels))
     
-    return X, y, all_labels
+    return X, y, all_labels, input_shape
 
-def build_model(num_classes):
+def build_model(num_classes, input_shape):
     model = Sequential()
-    # BatchNormalization could be added here, but our custom normalization handles it.
-    model.add(LSTM(64, return_sequences=True, activation='tanh', input_shape=INPUT_SHAPE))
+    model.add(LSTM(64, return_sequences=True, activation='tanh', input_shape=input_shape))
     model.add(Dropout(0.2))
     model.add(LSTM(128, return_sequences=False, activation='tanh'))
     model.add(Dropout(0.2))
@@ -113,14 +133,15 @@ def build_model(num_classes):
     return model
 
 def train():
-    logger.info("--- Quality Improvement: Re-training Model with Normalization ---")
-    X, y, all_labels = load_data()
+    logger.info("--- Phase 4: Training Model ---")
+    X, y, all_labels, input_shape = load_data()
     if len(X) == 0:
         logger.error("No data found to train on!")
         return
 
+    logger.info(f"Determined Input Shape: {input_shape}")
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
-    model = build_model(len(all_labels))
+    model = build_model(len(all_labels), input_shape)
     
     logger.info(f"Dataset Size (with augmentation): {len(X)}")
     model.fit(X_train, y_train, epochs=150, batch_size=32, validation_data=(X_test, y_test))
