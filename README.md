@@ -41,7 +41,7 @@ This project is a high-performance **Landmark-based** recognition system. It has
 
 ### 1. Data Collection
 Collect data for each sign you want the AI to learn:
-- **Hand-Only (Legacy)**: Run `python sign_dataset_capture.py` (static) or `python collect_landmarks.py` (motion).
+- **Hand-Only (Legacy)**: Run `python collect_sign_dataset.py` (static) or `python collect_landmarks.py` (motion).
 - **Holistic Tracking (Advanced)**: Run `python collect_holistic.py`. Press **'s'** to record a 30-frame sequence including your face, pose, and hands.
 
 ### 2. Verification
@@ -75,7 +75,7 @@ See [ROADMAP.md](ROADMAP.md) for details:
 ## Project Structure
 - `collect_holistic.py`: Captures full-body holistic sequences (Phase 4).
 - `realtime_holistic.py`: Live holistic translation script (Phase 4).
-- `sign_dataset_capture.py`: Captures static hand landmarks (Legacy).
+- `collect_sign_dataset.py`: Captures static hand landmarks (Legacy).
 - `collect_landmarks.py`: Captures hand motion sequences (Legacy).
 - `train_model.py`: Trains the LSTM network (Supports both Hand and Holistic).
 - `realtime_inference.py`: Live hand-only translation (Legacy).
