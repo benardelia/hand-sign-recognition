@@ -4,11 +4,22 @@ from sklearn.model_selection import train_test_split
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import Callback
 from utils.logger_config import setup_logger
 from utils.normalization import normalize_landmarks, flip_landmarks
 
 # Initialize Logger
 logger = setup_logger(__name__)
+
+class WebProgressCallback(Callback):
+    def on_epoch_end(self, epoch, logs=None):
+        if logs is None:
+            logs = {}
+        acc = logs.get('categorical_accuracy', 0.0)
+        loss = logs.get('loss', 0.0)
+        val_acc = logs.get('val_categorical_accuracy', 0.0)
+        val_loss = logs.get('val_loss', 0.0)
+        print(f"\nEPOCH_END:{epoch+1}:{acc:.4f}:{loss:.4f}:{val_acc:.4f}:{val_loss:.4f}", flush=True)
 
 # --- CONFIGURATION ---
 DATA_PATH = os.path.join('Data', 'Landmarks') 
@@ -97,20 +108,19 @@ def load_data():
                 # Also filter by expected feature size
                 if (is_seq and res.shape[-1] != input_shape[-1]) or (not is_seq and res.shape[0] != input_shape[-1]):
                     continue
-
+ 
                 for s in process_sample(res, is_sequence=is_seq):
                     sequences.append(s)
                     labels.append(label_map[label])
-
+ 
     # 2. Load Sequence Data
     add_files_from_path(HOLISTIC_DATA_PATH, is_seq=True)
     if input_shape is None:
         add_files_from_path(DATA_PATH, is_seq=True)
-
-    # 3. Load Static Data
+ 
     # 3. Load Static Data
     add_files_from_path(STATIC_PATH, is_seq=False)
-
+ 
     X = np.array(sequences)
     y = to_categorical(labels).astype(int)
     
@@ -118,7 +128,7 @@ def load_data():
         f.write("\n".join(all_labels))
     
     return X, y, all_labels, input_shape
-
+ 
 def build_model(num_classes, input_shape):
     model = Sequential()
     model.add(LSTM(64, return_sequences=True, activation='tanh', input_shape=input_shape))
@@ -131,23 +141,23 @@ def build_model(num_classes, input_shape):
     
     model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
     return model
-
+ 
 def train():
     logger.info("--- Phase 4: Training Model ---")
     X, y, all_labels, input_shape = load_data()
     if len(X) == 0:
         logger.error("No data found to train on!")
         return
-
+ 
     logger.info(f"Determined Input Shape: {input_shape}")
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
     model = build_model(len(all_labels), input_shape)
     
     logger.info(f"Dataset Size (with augmentation): {len(X)}")
-    model.fit(X_train, y_train, epochs=150, batch_size=32, validation_data=(X_test, y_test))
+    model.fit(X_train, y_train, epochs=150, batch_size=32, validation_data=(X_test, y_test), callbacks=[WebProgressCallback()])
     
     model.save(os.path.join(MODELS_PATH, 'hand_model.h5'))
     logger.info("Training Complete with improved normalization!")
-
+ 
 if __name__ == "__main__":
     train()

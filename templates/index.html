@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScribeSign AI - Sign Language Translation Dashboard</title>
+    <!-- Google Fonts: Outfit & Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@300;400;500;600;700;800;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Chart.js for live training plots -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-hands-asl-interpreting"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>ScribeSign <span>AI</span></h1>
+                    <p>Holistic Sign Translator</p>
+                </div>
+            </div>
+            
+            <nav class="sidebar-nav">
+                <ul>
+                    <li class="nav-item active" data-tab="overview">
+                        <i class="fa-solid fa-chart-line"></i>
+                        <span>Overview</span>
+                    </li>
+                    <li class="nav-item" data-tab="translator">
+                        <i class="fa-solid fa-video"></i>
+                        <span>Live Translator</span>
+                    </li>
+                    <li class="nav-item" data-tab="builder">
+                        <i class="fa-solid fa-square-plus"></i>
+                        <span>Dataset Builder</span>
+                    </li>
+                    <li class="nav-item" data-tab="trainer">
+                        <i class="fa-solid fa-brain"></i>
+                        <span>Model Trainer</span>
+                    </li>
+                    <li class="nav-item" data-tab="player">
+                        <i class="fa-solid fa-play"></i>
+                        <span>Landmark Player</span>
+                    </li>
+                </ul>
+            </nav>
+            
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="dot pulse green" id="sys-status-dot"></span>
+                    <span id="sys-status-text">Webcam Active</span>
+                </div>
+                <div class="model-badge">
+                    <i class="fa-solid fa-circle-nodes"></i>
+                    <span id="active-model-name">Holistic (1662)</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="content-header">
+                <div class="header-title">
+                    <h2 id="current-tab-title">Dashboard Overview</h2>
+                    <p id="current-tab-subtitle">Real-time status, labels inventory, and models overview.</p>
+                </div>
+                <div class="header-actions">
+                    <div class="camera-widget glass">
+                        <i class="fa-solid fa-video"></i>
+                        <select id="camera-source-select" class="camera-select-dropdown" onchange="changeCameraSource(this.value)">
+                            <option value="0">Camera 0 (Default)</option>
+                        </select>
+                    </div>
+                    <div class="time-widget">
+                        <i class="fa-regular fa-clock"></i>
+                        <span id="live-time">14:00:00</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- TAB 1: OVERVIEW -->
+            <div class="tab-panel active" id="tab-overview">
+                <div class="stats-grid">
+                    <div class="stat-card pink-gradient">
+                        <div class="stat-icon">
+                            <i class="fa-solid fa-hands"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3 id="stat-total-signs">0</h3>
+                            <p>Total Signs Registered</p>
+                        </div>
+                    </div>
+                    <div class="stat-card purple-gradient">
+                        <div class="stat-icon">
+                            <i class="fa-solid fa-database"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3 id="stat-total-samples">0</h3>
+                            <p>Sequence Samples</p>
+                        </div>
+                    </div>
+                    <div class="stat-card blue-gradient">
+                        <div class="stat-icon">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3 id="stat-model-loaded">Checking...</h3>
+                            <p>LSTM Model Status</p>
+                        </div>
+                    </div>
+                    <div class="stat-card green-gradient">
+                        <div class="stat-icon">
+                            <i class="fa-solid fa-bolt"></i>
+                        </div>
+                        <div class="stat-details">
+                            <h3>~30 FPS</h3>
+                            <p>Camera Performance</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="overview-grid">
+                    <div class="overview-card info-card glass">
+                        <h3>Welcome to ScribeSign AI</h3>
+                        <p>This is a high-performance **MediaPipe Holistic** and **LSTM Neural Network** computer vision engine designed to translate complex sign language motions (incorporating face mesh, body pose, and both hands) directly into coherent English speech and sentences.</p>
+                        
+                        <div class="quick-actions">
+                            <h4>Quick Actions</h4>
+                            <div class="action-buttons">
+                                <button class="btn btn-primary" onclick="switchTab('translator')">
+                                    <i class="fa-solid fa-video"></i> Start Translation
+                                </button>
+                                <button class="btn btn-secondary" onclick="switchTab('builder')">
+                                    <i class="fa-solid fa-square-plus"></i> Record Sign
+                                </button>
+                                <button class="btn btn-secondary" onclick="switchTab('trainer')">
+                                    <i class="fa-solid fa-brain"></i> Train Model
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="overview-card signs-list-card glass">
+                        <div class="card-header-flex">
+                            <h3>Registered Signs Inventory</h3>
+                            <span class="badge" id="signs-inventory-count">0 Signs</span>
+                        </div>
+                        <div class="inventory-table-wrapper">
+                            <table class="inventory-table">
+                                <thead>
+                                    <tr>
+                                        <th>Sign / Gloss Label</th>
+                                        <th>Dataset Samples</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="signs-inventory-tbody">
+                                    <tr>
+                                        <td colspan="3" class="text-center text-muted">Loading dataset...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 2: LIVE TRANSLATOR -->
+            <div class="tab-panel" id="tab-translator">
+                <div class="translator-layout">
+                    <!-- Left: Camera Viewport -->
+                    <div class="translator-viewport glass">
+                        <div class="camera-container">
+                            <img id="webcam-feed-translator" src="" alt="Webcam Feed Loading..." class="feed-img">
+                            <div class="inference-overlay-indicator">
+                                <span class="indicator-dot pulse green"></span>
+                                <span>LIVE TRANSLATING</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Sentence Output Bar (Subtitle overlay) -->
+                        <div class="subtitle-bar-wrapper">
+                            <div class="subtitle-caption">TRANSLATED SENTENCE</div>
+                            <div class="subtitle-content glass">
+                                <p id="active-sentence">Start signing to reconstruct sentences...</p>
+                            </div>
+                            <div class="subtitle-controls">
+                                <button class="btn btn-action tooltip" id="speak-sentence-btn" data-tooltip="Speak aloud">
+                                    <i class="fa-solid fa-volume-high"></i>
+                                    <span>Speak</span>
+                                </button>
+                                <button class="btn btn-action tooltip" id="copy-sentence-btn" data-tooltip="Copy to Clipboard">
+                                    <i class="fa-solid fa-copy"></i>
+                                    <span>Copy</span>
+                                </button>
+                                <button class="btn btn-action btn-danger tooltip" id="clear-sentence-btn" data-tooltip="Clear sentence buffer">
+                                    <i class="fa-solid fa-trash-can"></i>
+                                    <span>Clear</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Translation History / Statistics -->
+                    <div class="translator-history glass">
+                        <h3>System Status & Logs</h3>
+                        <div class="history-metrics">
+                            <div class="metric-item">
+                                <span class="label">Current Prediction:</span>
+                                <span class="value highlighted" id="pred-word">-</span>
+                            </div>
+                            <div class="metric-item">
+                                <span class="label">Confidence Score:</span>
+                                <div class="progress-bar-wrapper">
+                                    <div class="progress-bar-fill" id="pred-confidence-bar" style="width: 0%"></div>
+                                    <span class="progress-percent" id="pred-confidence-text">0%</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <hr class="divider">
+
+                        <h4>Active Gloss Buffer</h4>
+                        <p class="text-muted small">Buffer of stable detected gloss keywords (max 5) fed to the NLP Sentence Reconstructor:</p>
+                        <div class="gloss-bubbles" id="active-gloss-bubbles">
+                            <span class="text-muted small">Empty buffer</span>
+                        </div>
+
+                        <hr class="divider">
+
+                        <h4>Reconstruction Logs</h4>
+                        <div class="log-console-container" id="reconstruction-logs">
+                            <div class="log-item system">System initialized. Real-time loop is running.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 3: DATASET BUILDER -->
+            <div class="tab-panel" id="tab-builder">
+                <div class="builder-layout">
+                    <!-- Left: Control & Collection Screen -->
+                    <div class="builder-controls-card glass">
+                        <h3>Record Landmark Sequences</h3>
+                        <p class="text-muted small">Enter a custom word/label. Pressing **Record** will start a 3-second visual countdown and capture exactly **30 frames** of holistic landmarks.</p>
+                        
+                        <div class="camera-container-small">
+                            <img id="webcam-feed-builder" src="" alt="Webcam Feed Loading..." class="feed-img">
+                            <div class="inference-overlay-indicator">
+                                <span class="indicator-dot pulse green"></span>
+                                <span>CAMERA PREVIEW</span>
+                            </div>
+                        </div>
+                        
+                        <form id="record-sign-form" class="builder-form">
+                            <div class="form-group">
+                                <label for="label-input">Sign Label (Gloss Keyword)</label>
+                                <input type="text" id="label-input" placeholder="e.g. THANK YOU" required autocomplete="off">
+                            </div>
+                            <button type="submit" class="btn btn-gradient btn-large" id="start-record-btn">
+                                <i class="fa-solid fa-record-vinyl"></i> Initiate Sequence Capture
+                            </button>
+                        </form>
+
+                        <div class="recording-status-box glass hidden" id="record-status-box">
+                            <div class="status-title" id="record-status-title">Count down</div>
+                            <div class="status-progress-bar">
+                                <div class="status-progress-fill" id="record-status-fill" style="width: 0%"></div>
+                            </div>
+                            <div class="status-numbers" id="record-status-numbers">Frame 0 / 30</div>
+                        </div>
+
+                        <div class="guidelines-card glass">
+                            <h4><i class="fa-solid fa-lightbulb yellow"></i> Recording Guidelines</h4>
+                            <ul>
+                                <li>Ensure your entire face, shoulders, and both hands are clearly visible in the camera frame.</li>
+                                <li>Perform the gesture continuously throughout the recording period.</li>
+                                <li>Try varying camera angles and hand positions slightly in each sequence to achieve a highly robust model.</li>
+                                <li>Aim for at least **15-20 sequences per sign** for reliable accuracy.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Right: Grid of signs and counts -->
+                    <div class="builder-grid-card glass">
+                        <div class="card-header-flex">
+                            <h3>Holistic Dataset Inventory</h3>
+                            <button class="btn btn-icon" id="refresh-dataset-btn" onclick="fetchSigns()"><i class="fa-solid fa-rotate"></i></button>
+                        </div>
+                        <p class="text-muted small">Current gesture directories and sequences saved in `Data/Holistic_Landmarks`:</p>
+                        
+                        <div class="signs-grid" id="signs-grid-container">
+                            <!-- Populated by JS -->
+                            <div class="text-center text-muted col-span-all">Loading signs...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: MODEL TRAINER -->
+            <div class="tab-panel" id="tab-trainer">
+                <div class="trainer-layout">
+                    <!-- Left Panel: Parameters and Control -->
+                    <div class="trainer-controls glass">
+                        <h3>LSTM Training Dashboard</h3>
+                        <p class="text-muted small">Fine-tune training options and trigger network training over collected landmarks. This process will disable real-time inference temporarily.</p>
+
+                        <div class="form-group-row">
+                            <div class="form-group">
+                                <label for="train-epochs">Epochs</label>
+                                <input type="number" id="train-epochs" value="150" min="10" max="1000">
+                            </div>
+                            <div class="form-group">
+                                <label for="train-batch">Batch Size</label>
+                                <input type="number" id="train-batch" value="32" min="8" max="256">
+                            </div>
+                        </div>
+
+                        <button class="btn btn-gradient btn-large" id="start-train-btn">
+                            <i class="fa-solid fa-gears"></i> Train Neural Network Model
+                        </button>
+
+                        <div class="training-status-box glass hidden" id="training-progress-info">
+                            <div class="active-epoch">Active Epoch: <span id="current-epoch">0</span> / <span id="total-epochs">150</span></div>
+                            <div class="training-stats-mini">
+                                <div>Loss: <span id="mini-loss">0.0000</span></div>
+                                <div>Acc: <span id="mini-acc">0.0%</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Training Graphs & Real-time Console Log -->
+                    <div class="trainer-visuals">
+                        <!-- Chart container -->
+                        <div class="chart-card glass">
+                            <h3>Real-time Training Metrics Plot</h3>
+                            <div class="chart-container">
+                                <canvas id="trainingChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Console logs container -->
+                        <div class="console-card glass">
+                            <div class="card-header-flex">
+                                <h3>Training System stdout</h3>
+                                <span class="badge console-badge">console</span>
+                            </div>
+                            <div class="terminal-log-console" id="training-terminal-console">
+                                <div class="term-line system">Waiting to initialize training script...</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 5: LANDMARK PLAYER -->
+            <div class="tab-panel" id="tab-player">
+                <div class="player-layout">
+                    <!-- Left Panel: File Browser -->
+                    <div class="player-files-card glass">
+                        <h3>Landmarks Files Browser</h3>
+                        <p class="text-muted small">Select a recorded `.npy` sequence file from the folders below to play it back in the skeletal viewer.</p>
+                        
+                        <div class="files-accordion" id="player-files-accordion">
+                            <!-- Populated by JS -->
+                            <div class="text-center text-muted">Loading files...</div>
+                        </div>
+                    </div>
+
+                    <!-- Right Panel: Skeletal Canvas Viewport & Controls -->
+                    <div class="player-viewer-card glass">
+                        <div class="viewer-header">
+                            <h3 id="active-file-title">No Sequence Selected</h3>
+                            <span class="badge" id="active-file-badge">-</span>
+                        </div>
+                        
+                        <div class="canvas-container">
+                            <canvas id="skeleton-canvas" width="640" height="480"></canvas>
+                            
+                            <!-- Frame Number overlay -->
+                            <div class="canvas-frame-overlay" id="player-frame-overlay">Frame: 0/30</div>
+                        </div>
+
+                        <!-- Controls -->
+                        <div class="viewer-controls">
+                            <div class="playback-buttons">
+                                <button class="btn btn-icon" id="player-prev-btn" title="Previous Frame"><i class="fa-solid fa-backward"></i></button>
+                                <button class="btn btn-icon btn-primary" id="player-play-btn" title="Play"><i class="fa-solid fa-play"></i></button>
+                                <button class="btn btn-icon" id="player-next-btn" title="Next Frame"><i class="fa-solid fa-forward"></i></button>
+                                <button class="btn btn-icon toggle-active" id="player-loop-btn" title="Loop Playback"><i class="fa-solid fa-repeat"></i></button>
+                            </div>
+                            
+                            <!-- Scrubber -->
+                            <div class="scrubber-container">
+                                <input type="range" id="player-scrubber" min="0" max="29" value="0" class="scrubber-slider">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Script loading -->
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
