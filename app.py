@@ -149,9 +149,11 @@ class CameraManager:
             self.is_running = False
             return
             
-        mp_holistic = mp.solutions.holistic
-        mp_drawing = mp.solutions.drawing_utils
-        
+        if mp_holistic is None:
+            logger.error("MediaPipe holistic module is not available. Local camera capture disabled.")
+            self.is_running = False
+            return
+            
         with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
             while self.is_running:
                 # Check for camera switch request
@@ -459,7 +461,8 @@ def process_frame():
                 "labels": camera_manager.labels
             })
     except Exception as e:
-        logger.error(f"Error processing client frame: {e}")
+        import traceback
+        logger.error(f"Error processing client frame: {e}\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/status')
