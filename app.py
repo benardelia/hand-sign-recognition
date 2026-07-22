@@ -13,6 +13,7 @@ import numpy as np
 import threading
 import subprocess
 import mediapipe as mp
+import base64
 from flask import Flask, render_template, Response, jsonify, request
 from tensorflow.keras.models import load_model
 
@@ -124,7 +125,6 @@ class CameraManager:
             self.is_running = False
             return
             
-        # MediaPipe Holistic must be initialized inside the thread
         mp_holistic = mp.solutions.holistic
         mp_drawing = mp.solutions.drawing_utils
         
@@ -148,124 +148,129 @@ class CameraManager:
                     time.sleep(0.03)
                     continue
                 
-                # Mirror the frame for intuitive UI
-                frame = cv2.flip(frame, 1)
-                self.frame = frame.copy()
-                
-                # Make MediaPipe detection
-                image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image.flags.writeable = False
+                self.process_frame_data(frame, holistic, mp_drawing, mp_holistic)
+                time.sleep(0.01)
+
+    def process_frame_data(self, raw_frame, holistic_instance=None, drawing_utils=None, holistic_module=None):
+        if drawing_utils is None:
+            drawing_utils = mp.solutions.drawing_utils
+        if holistic_module is None:
+            holistic_module = mp.solutions.holistic
+            
+        frame = cv2.flip(raw_frame, 1)
+        self.frame = frame.copy()
+        
+        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image.flags.writeable = False
+        
+        if holistic_instance is not None:
+            results = holistic_instance.process(image)
+        else:
+            with mp.solutions.holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
                 results = holistic.process(image)
-                image.flags.writeable = True
-                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
                 
-                # Draw landmarks on the image for visual feedback
-                if results.face_landmarks:
-                    mp_drawing.draw_landmarks(image, results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, 
-                                             mp_drawing.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
-                                             mp_drawing.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
-                if results.pose_landmarks:
-                    mp_drawing.draw_landmarks(image, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
-                if results.left_hand_landmarks:
-                    mp_drawing.draw_landmarks(image, results.left_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
-                if results.right_hand_landmarks:
-                    mp_drawing.draw_landmarks(image, results.right_hand_landmarks, mp_holistic.HAND_CONNECTIONS)
+        image.flags.writeable = True
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        
+        if results.face_landmarks:
+            drawing_utils.draw_landmarks(image, results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, 
+                                     drawing_utils.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
+                                     drawing_utils.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
+        if results.pose_landmarks:
+            drawing_utils.draw_landmarks(image, results.pose_landmarks, holistic_module.POSE_CONNECTIONS)
+        if results.left_hand_landmarks:
+            drawing_utils.draw_landmarks(image, results.left_hand_landmarks, holistic_module.HAND_CONNECTIONS)
+        if results.right_hand_landmarks:
+            drawing_utils.draw_landmarks(image, results.right_hand_landmarks, holistic_module.HAND_CONNECTIONS)
+        
+        keypoints = extract_holistic_keypoints(results)
+        
+        with self.lock:
+            if self.recording_status == "countdown":
+                elapsed = time.time() - self.countdown_start_time
+                remaining = max(0.0, self.countdown_duration - elapsed)
                 
-                # Get keypoints
-                keypoints = extract_holistic_keypoints(results)
+                h, w, _ = image.shape
+                cv2.rectangle(image, (0, 0), (w, h), (0, 0, 0), 2)
+                overlay = image.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+                cv2.addWeighted(overlay, 0.4, image, 0.6, 0, image)
                 
-                # Handle states
-                with self.lock:
-                    if self.recording_status == "countdown":
-                        elapsed = time.time() - self.countdown_start_time
-                        remaining = max(0.0, self.countdown_duration - elapsed)
+                text = f"{int(remaining) + 1}" if remaining > 0 else "GO!"
+                cv2.putText(image, text, (int(w/2) - 30, int(h/2) + 20), 
+                            cv2.FONT_HERSHEY_DUPLEX, 3.0, (0, 255, 255), 5, cv2.LINE_AA)
+                cv2.putText(image, f"Prepare sign: '{self.recording_label}'", (20, h - 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                
+                if elapsed >= self.countdown_duration:
+                    self.recording_status = "recording"
+                    self.recording_frames_collected = 0
+                    self.recording_sequence = []
+                    logger.info("Recording started...")
+                    
+            elif self.recording_status == "recording":
+                self.recording_sequence.append(keypoints)
+                self.recording_frames_collected += 1
+                
+                h, w, _ = image.shape
+                cv2.rectangle(image, (0, 0), (w, h), (0, 0, 255), 3)
+                cv2.putText(image, "RECORDING...", (15, 40), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                cv2.putText(image, f"Frame: {self.recording_frames_collected}/{SEQUENCE_LENGTH}", (15, 80), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                
+                progress_w = int((self.recording_frames_collected / SEQUENCE_LENGTH) * (w - 40))
+                cv2.rectangle(image, (20, h - 30), (w - 20, h - 15), (50, 50, 50), -1)
+                cv2.rectangle(image, (20, h - 30), (20 + progress_w, h - 15), (0, 0, 255), -1)
+                
+                if self.recording_frames_collected >= SEQUENCE_LENGTH:
+                    self.recording_status = "saving"
+                    threading.Thread(target=self._save_recording, daemon=True).start()
+                    
+            elif self.recording_status == "saved":
+                h, w, _ = image.shape
+                cv2.rectangle(image, (0, 0), (w, h), (0, 255, 0), 3)
+                cv2.putText(image, "SEQUENCE SAVED!", (int(w/2) - 150, int(h/2)), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+                
+            elif self.model_loaded:
+                self.sequence.append(keypoints)
+                self.sequence = self.sequence[-SEQUENCE_LENGTH:]
+                
+                if len(self.sequence) == SEQUENCE_LENGTH:
+                    input_data = np.expand_dims(self.sequence, axis=0)
+                    
+                    if self.expected_shape == 1662:
+                        res = self.model.predict(input_data, verbose=0)[0]
+                        index = np.argmax(res)
+                        confidence = res[index]
+                        self.confidence = float(confidence)
                         
-                        # Visual feedback
-                        h, w, _ = image.shape
-                        cv2.rectangle(image, (0, 0), (w, h), (0, 0, 0), 2)
-                        overlay = image.copy()
-                        cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-                        cv2.addWeighted(overlay, 0.4, image, 0.6, 0, image)
-                        
-                        text = f"{int(remaining) + 1}" if remaining > 0 else "GO!"
-                        cv2.putText(image, text, (int(w/2) - 30, int(h/2) + 20), 
-                                    cv2.FONT_HERSHEY_DUPLEX, 3.0, (0, 255, 255), 5, cv2.LINE_AA)
-                        cv2.putText(image, f"Prepare sign: '{self.recording_label}'", (20, h - 30), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                        
-                        if elapsed >= self.countdown_duration:
-                            self.recording_status = "recording"
-                            self.recording_frames_collected = 0
-                            self.recording_sequence = []
-                            logger.info("Recording started...")
+                        if confidence > self.threshold:
+                            detected_word = self.labels[index]
                             
-                    elif self.recording_status == "recording":
-                        self.recording_sequence.append(keypoints)
-                        self.recording_frames_collected += 1
-                        
-                        # Show frame progress
-                        h, w, _ = image.shape
-                        cv2.rectangle(image, (0, 0), (w, h), (0, 0, 255), 3) # Red border
-                        cv2.putText(image, "RECORDING...", (15, 40), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                        cv2.putText(image, f"Frame: {self.recording_frames_collected}/{SEQUENCE_LENGTH}", (15, 80), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                        
-                        # Draw a loading bar for recording progress
-                        progress_w = int((self.recording_frames_collected / SEQUENCE_LENGTH) * (w - 40))
-                        cv2.rectangle(image, (20, h - 30), (w - 20, h - 15), (50, 50, 50), -1)
-                        cv2.rectangle(image, (20, h - 30), (20 + progress_w, h - 15), (0, 0, 255), -1)
-                        
-                        if self.recording_frames_collected >= SEQUENCE_LENGTH:
-                            self.recording_status = "saving"
-                            # Save in a separate thread so camera thread doesn't lag
-                            threading.Thread(target=self._save_recording, daemon=True).start()
-                            
-                    elif self.recording_status == "saved":
-                        h, w, _ = image.shape
-                        cv2.rectangle(image, (0, 0), (w, h), (0, 255, 0), 3) # Green border
-                        cv2.putText(image, "SEQUENCE SAVED!", (int(w/2) - 150, int(h/2)), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                        
-                    elif self.model_loaded:
-                        # Standard inference mode
-                        self.sequence.append(keypoints)
-                        self.sequence = self.sequence[-SEQUENCE_LENGTH:]
-                        
-                        if len(self.sequence) == SEQUENCE_LENGTH:
-                            input_data = np.expand_dims(self.sequence, axis=0)
-                            
-                            if self.expected_shape == 1662:
-                                res = self.model.predict(input_data, verbose=0)[0]
-                                index = np.argmax(res)
-                                confidence = res[index]
-                                self.confidence = float(confidence)
-                                
-                                if confidence > self.threshold:
-                                    detected_word = self.labels[index]
-                                    
-                                    if detected_word == self.last_prediction:
-                                        self.action_counter += 1
-                                    else:
-                                        self.action_counter = 0
-                                        self.last_prediction = detected_word
-                                    
-                                    if self.action_counter == STABILITY_FRAMES:
-                                        if not self.gloss_buffer or self.gloss_buffer[-1] != detected_word:
-                                            self.gloss_buffer.append(detected_word)
-                                            self.gloss_buffer = self.gloss_buffer[-5:]
-                                            self.current_sentence = translator.translate(self.gloss_buffer)
-                                            logger.info(f"Detected gloss: {detected_word} | Reconstructed sentence: {self.current_sentence}")
-                                        self.action_counter = 0
-                                        
-                                    cv2.putText(image, f"{detected_word} ({int(confidence*100)}%)", (15, 45), 
-                                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                            if detected_word == self.last_prediction:
+                                self.action_counter += 1
                             else:
-                                cv2.putText(image, "Error: Model shape mismatch.", (15, 45), 
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                
-                self.annotated_frame = image.copy()
-                time.sleep(0.01) # Small throttle
+                                self.action_counter = 0
+                                self.last_prediction = detected_word
+                            
+                            if self.action_counter == STABILITY_FRAMES:
+                                if not self.gloss_buffer or self.gloss_buffer[-1] != detected_word:
+                                    self.gloss_buffer.append(detected_word)
+                                    self.gloss_buffer = self.gloss_buffer[-5:]
+                                    self.current_sentence = translator.translate(self.gloss_buffer)
+                                    logger.info(f"Detected gloss: {detected_word} | Reconstructed sentence: {self.current_sentence}")
+                                self.action_counter = 0
+                                
+                            cv2.putText(image, f"{detected_word} ({int(confidence*100)}%)", (15, 45), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                    else:
+                        cv2.putText(image, "Error: Model shape mismatch.", (15, 45), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+        self.annotated_frame = image.copy()
+        return image
 
     def _save_recording(self):
         try:
@@ -357,6 +362,53 @@ def video_feed():
     camera_manager.start()
     return Response(gen(camera_manager),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+# MediaPipe instance dedicated for HTTP client stream processing
+api_mp_holistic = mp.solutions.holistic
+api_mp_drawing = mp.solutions.drawing_utils
+api_holistic_instance = api_mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+@app.route('/api/process_frame', methods=['POST'])
+def process_frame():
+    try:
+        data = request.json or {}
+        image_data = data.get('image', '')
+        if not image_data:
+            return jsonify({"status": "error", "message": "No image payload provided"}), 400
+            
+        if ',' in image_data:
+            image_data = image_data.split(',')[1]
+            
+        image_bytes = base64.b64decode(image_data)
+        np_arr = np.frombuffer(image_bytes, np.uint8)
+        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            return jsonify({"status": "error", "message": "Invalid image payload"}), 400
+            
+        annotated_frame = camera_manager.process_frame_data(frame, api_holistic_instance, api_mp_drawing, api_mp_holistic)
+        
+        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        encoded_image = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
+        
+        with camera_manager.lock:
+            return jsonify({
+                "status": "success",
+                "annotated_image": encoded_image,
+                "current_sentence": camera_manager.current_sentence,
+                "last_prediction": camera_manager.last_prediction,
+                "confidence": round(camera_manager.confidence, 2),
+                "gloss_buffer": camera_manager.gloss_buffer,
+                "is_recording": camera_manager.recording_status != "idle",
+                "recording_label": camera_manager.recording_label or "",
+                "recording_status": camera_manager.recording_status,
+                "recording_frames_collected": camera_manager.recording_frames_collected,
+                "model_loaded": camera_manager.model_loaded,
+                "labels": camera_manager.labels
+            })
+    except Exception as e:
+        logger.error(f"Error processing client frame: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/status')
 def get_status():

@@ -411,6 +411,10 @@
         </main>
     </div>
 
+    <!-- Hidden HTML5 Video & Canvas for Browser Client Webcam Capture -->
+    <video id="client-webcam-video" style="display:none;" autoplay playsinline muted></video>
+    <canvas id="client-webcam-canvas" style="display:none;"></canvas>
+
     <!-- Script loading -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>

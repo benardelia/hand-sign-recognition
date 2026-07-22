@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initModelTrainer();
     initLandmarkPlayer();
     initCameraSelector();
+    initClientWebcamStream();
 });
 
 // --- CLOCK COMPONENT ---
@@ -80,20 +81,21 @@ function switchTab(tabId) {
     } else if (tabId === 'translator') {
         titleEl.textContent = 'Live Sign Translator';
         subtitleEl.textContent = 'Live camera translation powered by MediaPipe Holistic and LSTM Neural Networks.';
-        // Load active feed and turn off hidden feed
-        document.getElementById('webcam-feed-translator').src = '/video_feed';
+        if (!isClientWebcamActive) {
+            document.getElementById('webcam-feed-translator').src = '/video_feed';
+        }
         document.getElementById('webcam-feed-builder').src = '';
     } else if (tabId === 'builder') {
         titleEl.textContent = 'Dataset Builder';
         subtitleEl.textContent = 'Collect new sign landmark sequences to train the model.';
-        // Load active feed and turn off hidden feed
-        document.getElementById('webcam-feed-builder').src = '/video_feed';
+        if (!isClientWebcamActive) {
+            document.getElementById('webcam-feed-builder').src = '/video_feed';
+        }
         document.getElementById('webcam-feed-translator').src = '';
         fetchSigns();
     } else if (tabId === 'trainer') {
         titleEl.textContent = 'LSTM Model Trainer';
         subtitleEl.textContent = 'Train your custom neural network with live analytics outputs.';
-        // Stop camera feed to save CPU/GPU during training
         document.getElementById('webcam-feed-translator').src = '';
         document.getElementById('webcam-feed-builder').src = '';
     } else if (tabId === 'player') {
@@ -1039,4 +1041,82 @@ function changeCameraSource(cameraId) {
         if (select) select.disabled = false;
         fetchAvailableCameras(); // Re-sync state
     });
+}
+
+// --- CLIENT BROWSER WEBCAM STREAMING (FOR VPS / CLOUD DEPLOYMENTS) ---
+let clientWebcamStream = null;
+let clientWebcamVideo = null;
+let clientWebcamCanvas = null;
+let isClientWebcamActive = false;
+let streamingInterval = null;
+let isProcessingFrame = false;
+
+async function initClientWebcamStream() {
+    clientWebcamVideo = document.getElementById('client-webcam-video');
+    clientWebcamCanvas = document.getElementById('client-webcam-canvas');
+    if (!clientWebcamVideo || !clientWebcamCanvas) return;
+    
+    try {
+        clientWebcamStream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
+        });
+        clientWebcamVideo.srcObject = clientWebcamStream;
+        await clientWebcamVideo.play();
+        isClientWebcamActive = true;
+        console.log("Browser client webcam stream activated successfully.");
+        
+        const statusDot = document.getElementById('sys-status-dot');
+        const statusText = document.getElementById('sys-status-text');
+        if (statusDot) statusDot.className = 'dot pulse green';
+        if (statusText) statusText.textContent = 'Browser Camera Connected';
+        
+        startClientFrameStream();
+    } catch (err) {
+        console.warn("Could not access browser camera stream (falling back to server feed if available):", err);
+    }
+}
+
+function startClientFrameStream() {
+    if (streamingInterval) clearInterval(streamingInterval);
+    const ctx = clientWebcamCanvas.getContext('2d');
+    
+    streamingInterval = setInterval(async () => {
+        if (!isClientWebcamActive || isProcessingFrame) return;
+        if (activeTab !== 'translator' && activeTab !== 'builder') return;
+        if (!clientWebcamVideo || clientWebcamVideo.paused || clientWebcamVideo.ended) return;
+        
+        isProcessingFrame = true;
+        
+        clientWebcamCanvas.width = 640;
+        clientWebcamCanvas.height = 480;
+        ctx.drawImage(clientWebcamVideo, 0, 0, 640, 480);
+        
+        const base64Data = clientWebcamCanvas.toDataURL('image/jpeg', 0.65);
+        
+        try {
+            const res = await fetch('/api/process_frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ image: base64Data })
+            });
+            const data = await res.json();
+            
+            if (data.status === 'success' && data.annotated_image) {
+                const imgTranslator = document.getElementById('webcam-feed-translator');
+                const imgBuilder = document.getElementById('webcam-feed-builder');
+                
+                if (activeTab === 'translator' && imgTranslator) {
+                    imgTranslator.src = data.annotated_image;
+                } else if (activeTab === 'builder' && imgBuilder) {
+                    imgBuilder.src = data.annotated_image;
+                }
+                
+                updateUIState(data);
+            }
+        } catch (e) {
+            console.error("Frame streaming error:", e);
+        } finally {
+            isProcessingFrame = false;
+        }
+    }, 90);
 }
