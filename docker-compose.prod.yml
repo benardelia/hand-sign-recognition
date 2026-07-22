@@ -1,0 +1,18 @@
+services:
+  web:
+    ports: !reset []
+    expose:
+      - "5001"
+    environment:
+      - VIRTUAL_HOST=${DOMAIN_NAME}
+      - LETSENCRYPT_HOST=${DOMAIN_NAME}
+      - VIRTUAL_PORT=5001
+    networks:
+      - default
+      - proxy-network
+    command: gunicorn app:app --bind 0.0.0.0:5001 --workers 1 --threads 4 --timeout 120
+
+networks:
+  proxy-network:
+    external: true
+    name: global-proxy-network

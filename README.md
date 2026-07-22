@@ -92,6 +92,26 @@ Open **http://127.0.0.1:5001** (or the fallback port logged on startup) in your 
   kill <PID>
   ```
 
+### 6. Docker Deployment
+
+#### Local Development with Docker Compose
+```bash
+# 1. Copy environment variables file
+cp .env.example .env
+
+# 2. Build and start the container in development mode
+docker compose up --build -d
+
+# 3. View container logs
+docker compose logs -f
+```
+
+#### Production Deployment (with Reverse Proxy / SSL)
+```bash
+# Run production compose configuration
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
 ## Project Roadmap
 See [ROADMAP.md](ROADMAP.md) for details:
 - **Phase 1**: Landmark Collection (COMPLETED)

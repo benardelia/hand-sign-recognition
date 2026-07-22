@@ -1,0 +1,11 @@
+services:
+  web:
+    build: .
+    container_name: handsign_app
+    ports:
+      - "5001:5001"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    command: python app.py
