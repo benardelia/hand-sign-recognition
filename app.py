@@ -95,7 +95,8 @@ class CameraManager:
         self.countdown_start_time = 0
         self.countdown_duration = 3.0 # seconds
         
-        # Camera selection state
+        # Stream tracking
+        self.last_client_frame_time = 0
         self.camera_index = 0
         self.camera_needs_switch = False
         self.pending_camera_index = 0
@@ -327,13 +328,20 @@ class CameraManager:
 
     def start_recording(self, label):
         with self.lock:
+            has_active_stream = self.is_running or (time.time() - self.last_client_frame_time < 4.0)
+            if not has_active_stream:
+                logger.warning("Attempted to start recording without active camera stream.")
+                return False, "No active camera stream detected. Please ensure your browser webcam is allowed and active (HTTPS required for browser webcam)."
+                
             if self.recording_status == "idle":
                 self.recording_label = label
                 self.recording_status = "countdown"
                 self.countdown_start_time = time.time()
+                self.recording_sequence = []
+                self.recording_frames_collected = 0
                 logger.info(f"Initiated countdown for recording label: {label}")
-                return True
-            return False
+                return True, f"Countdown started for '{label}'"
+            return False, f"Camera is busy recording (current status: {self.recording_status})."
 
     def clear_sentence(self):
         with self.lock:
@@ -423,6 +431,7 @@ def process_frame():
         if frame is None:
             return jsonify({"status": "error", "message": "Invalid image payload"}), 400
             
+        camera_manager.last_client_frame_time = time.time()
         holistic_inst = get_api_holistic()
         annotated_frame = camera_manager.process_frame_data(
             frame, 
@@ -477,15 +486,15 @@ def clear_sentence():
 @app.route('/api/start_recording', methods=['POST'])
 def start_recording():
     data = request.json or {}
-    label = data.get('label', '').strip()
+    label = data.get('label', '').strip().upper()
     if not label:
         return jsonify({"status": "error", "message": "Label name is required."}), 400
         
-    success = camera_manager.start_recording(label)
+    success, msg = camera_manager.start_recording(label)
     if success:
-        return jsonify({"status": "success", "message": f"Countdown started for '{label}'"})
+        return jsonify({"status": "success", "message": msg})
     else:
-        return jsonify({"status": "error", "message": "Camera is busy recording."}), 409
+        return jsonify({"status": "error", "message": msg}), 400
 
 @app.route('/api/signs')
 def get_signs():

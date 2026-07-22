@@ -1072,7 +1072,17 @@ async function initClientWebcamStream() {
         
         startClientFrameStream();
     } catch (err) {
-        console.warn("Could not access browser camera stream (falling back to server feed if available):", err);
+        console.warn("Could not access browser camera stream:", err);
+        const statusDot = document.getElementById('sys-status-dot');
+        const statusText = document.getElementById('sys-status-text');
+        if (statusDot) statusDot.className = 'dot red';
+        if (statusText) {
+            if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+                statusText.textContent = 'Camera Blocked (HTTPS Required)';
+            } else {
+                statusText.textContent = 'Camera Blocked / Unavailable';
+            }
+        }
     }
 }
 
