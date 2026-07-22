@@ -9,13 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required by OpenCV and build tools
+# Install system dependencies required by MediaPipe and OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
+    libxrender1 \
+    libgomp1 \
+    libegl1 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install python dependencies

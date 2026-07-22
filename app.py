@@ -13,10 +13,16 @@ import numpy as np
 import threading
 import subprocess
 import mediapipe as mp
+
+# Safe MediaPipe Solutions resolver
+mp_holistic = None
+mp_drawing = None
+mp_face_mesh = None
+
 try:
-    import mediapipe.python.solutions.holistic as mp_holistic
-    import mediapipe.python.solutions.drawing_utils as mp_drawing
-    import mediapipe.python.solutions.face_mesh as mp_face_mesh
+    from mediapipe.python.solutions import holistic as mp_holistic
+    from mediapipe.python.solutions import drawing_utils as mp_drawing
+    from mediapipe.python.solutions import face_mesh as mp_face_mesh
 except Exception:
     try:
         from mediapipe import solutions as mp_solutions
@@ -24,9 +30,11 @@ except Exception:
         mp_drawing = mp_solutions.drawing_utils
         mp_face_mesh = mp_solutions.face_mesh
     except Exception:
-        mp_holistic = getattr(mp, 'solutions').holistic
-        mp_drawing = getattr(mp, 'solutions').drawing_utils
-        mp_face_mesh = getattr(mp, 'solutions').face_mesh
+        mp_solutions = getattr(mp, 'solutions', None)
+        if mp_solutions is not None:
+            mp_holistic = getattr(mp_solutions, 'holistic', None)
+            mp_drawing = getattr(mp_solutions, 'drawing_utils', None)
+            mp_face_mesh = getattr(mp_solutions, 'face_mesh', None)
 
 import base64
 from flask import Flask, render_template, Response, jsonify, request
@@ -171,6 +179,9 @@ class CameraManager:
             drawing_utils = mp_drawing
         if holistic_module is None:
             holistic_module = mp_holistic
+            
+        if drawing_utils is None or holistic_module is None:
+            return raw_frame
             
         frame = cv2.flip(raw_frame, 1)
         self.frame = frame.copy()
@@ -384,6 +395,8 @@ api_holistic_lock = threading.Lock()
 
 def get_api_holistic():
     global api_holistic_instance
+    if mp_holistic is None:
+        return None
     if api_holistic_instance is None:
         with api_holistic_lock:
             if api_holistic_instance is None:
