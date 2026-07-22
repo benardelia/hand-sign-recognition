@@ -1,5 +1,11 @@
 import os
+os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+
 import cv2
+if hasattr(cv2, 'setLogLevel'):
+    cv2.setLogLevel(0)
+
 import time
 import json
 import sys
@@ -81,7 +87,7 @@ class CameraManager:
                 logger.info(f"Model loaded successfully. Labels: {self.labels}. Expected feature size: {self.expected_shape}")
             else:
                 self.model_loaded = False
-                logger.warning("No trained model or labels found. Real-time translation will be disabled until model is trained.")
+                logger.info("No trained model or labels found in Model/ folder. Real-time translation is paused until a model is trained via the Web Dashboard.")
         except Exception as e:
             self.model_loaded = False
             logger.error(f"Failed to load model: {e}")
@@ -114,7 +120,7 @@ class CameraManager:
         # Initialize camera in the thread
         self.cap = cv2.VideoCapture(self.camera_index)
         if not self.cap.isOpened():
-            logger.error("Could not open webcam.")
+            logger.warning("No hardware webcam detected on server (Headless/VPS environment). Local camera capture is disabled.")
             self.is_running = False
             return
             
@@ -309,10 +315,11 @@ class CameraManager:
     def get_jpeg_frame(self):
         with self.lock:
             if self.annotated_frame is None:
-                # Return empty black frame if camera is loading
+                # Return informative placeholder frame if camera is offline/headless
                 img = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(img, "Starting Camera...", (180, 240), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                msg = "No Server Webcam (Client Stream Active)" if not self.is_running else "Starting Camera..."
+                cv2.putText(img, msg, (80, 240), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 _, jpeg = cv2.imencode('.jpg', img)
                 return jpeg.tobytes()
                 
@@ -453,35 +460,26 @@ def get_cameras():
     active_idx = getattr(camera_manager, 'camera_index', 0)
     available = []
     
-    # We probe indices 0 to 4
+    # We probe indices 0 to 4 safely
     for index in range(5):
-        if index == active_idx:
-            name = f"Camera {index}"
-            if index == 0:
-                name += " (Default)"
-            elif index == 1:
-                name += " (Built-in FaceTime HD)"
+        if index == active_idx and camera_manager.cap and camera_manager.cap.isOpened():
+            name = f"Camera {index} (Active)"
             available.append({"id": index, "name": name, "active": True})
             continue
             
-        cap = cv2.VideoCapture(index)
-        if cap.isOpened():
-            name = f"Camera {index}"
-            if index == 0:
-                name += " (Default)"
-            elif index == 1:
-                name += " (Built-in FaceTime HD)"
-            available.append({"id": index, "name": name, "active": False})
-            cap.release()
+        try:
+            cap = cv2.VideoCapture(index)
+            if cap.isOpened():
+                name = f"Camera {index}"
+                if index == 0:
+                    name += " (Default)"
+                available.append({"id": index, "name": name, "active": False})
+                cap.release()
+        except Exception:
+            pass
             
-    # Ensure active camera is in the list
-    if not any(c["id"] == active_idx for c in available):
-        name = f"Camera {active_idx}"
-        if active_idx == 0:
-            name += " (Default)"
-        elif active_idx == 1:
-            name += " (Built-in FaceTime HD)"
-        available.append({"id": active_idx, "name": name, "active": True})
+    if not available:
+        available.append({"id": 0, "name": "Webcam (Client Browser Stream)", "active": True})
         
     available.sort(key=lambda x: x["id"])
     return jsonify({"cameras": available, "active_id": active_idx})

@@ -1,4 +1,6 @@
 /venv
 /venv_legacy
-/Data
-/Model
+/Data/*
+!/Data/.gitkeep
+/Model/*
+!/Model/.gitkeep
