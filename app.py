@@ -13,6 +13,12 @@ import numpy as np
 import threading
 import subprocess
 import mediapipe as mp
+try:
+    import mediapipe.python.solutions as mp_solutions
+    mp.solutions = mp_solutions
+except Exception:
+    pass
+
 import base64
 from flask import Flask, render_template, Response, jsonify, request
 from tensorflow.keras.models import load_model
@@ -363,10 +369,24 @@ def video_feed():
     return Response(gen(camera_manager),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# MediaPipe instance dedicated for HTTP client stream processing
-api_mp_holistic = mp.solutions.holistic
-api_mp_drawing = mp.solutions.drawing_utils
-api_holistic_instance = api_mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+# MediaPipe instance lazily initialized for HTTP client stream processing
+api_holistic_instance = None
+api_holistic_lock = threading.Lock()
+
+def get_api_holistic():
+    global api_holistic_instance
+    if api_holistic_instance is None:
+        with api_holistic_lock:
+            if api_holistic_instance is None:
+                try:
+                    import mediapipe.python.solutions as mp_solutions
+                    mp.solutions = mp_solutions
+                except Exception:
+                    pass
+                api_holistic_instance = mp.solutions.holistic.Holistic(
+                    min_detection_confidence=0.5, min_tracking_confidence=0.5
+                )
+    return api_holistic_instance
 
 @app.route('/api/process_frame', methods=['POST'])
 def process_frame():
@@ -386,7 +406,13 @@ def process_frame():
         if frame is None:
             return jsonify({"status": "error", "message": "Invalid image payload"}), 400
             
-        annotated_frame = camera_manager.process_frame_data(frame, api_holistic_instance, api_mp_drawing, api_mp_holistic)
+        holistic_inst = get_api_holistic()
+        annotated_frame = camera_manager.process_frame_data(
+            frame, 
+            holistic_inst, 
+            mp.solutions.drawing_utils, 
+            mp.solutions.holistic
+        )
         
         _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
         encoded_image = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
