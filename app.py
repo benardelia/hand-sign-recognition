@@ -13,11 +13,10 @@ import numpy as np
 import threading
 import subprocess
 import mediapipe as mp
-try:
-    import mediapipe.python.solutions as mp_solutions
-    mp.solutions = mp_solutions
-except Exception:
-    pass
+from mediapipe import solutions as mp_solutions
+mp_holistic = mp_solutions.holistic
+mp_drawing = mp_solutions.drawing_utils
+mp_face_mesh = mp_solutions.face_mesh
 
 import base64
 from flask import Flask, render_template, Response, jsonify, request
@@ -159,9 +158,9 @@ class CameraManager:
 
     def process_frame_data(self, raw_frame, holistic_instance=None, drawing_utils=None, holistic_module=None):
         if drawing_utils is None:
-            drawing_utils = mp.solutions.drawing_utils
+            drawing_utils = mp_drawing
         if holistic_module is None:
-            holistic_module = mp.solutions.holistic
+            holistic_module = mp_holistic
             
         frame = cv2.flip(raw_frame, 1)
         self.frame = frame.copy()
@@ -172,14 +171,14 @@ class CameraManager:
         if holistic_instance is not None:
             results = holistic_instance.process(image)
         else:
-            with mp.solutions.holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
+            with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
                 results = holistic.process(image)
                 
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
         if results.face_landmarks:
-            drawing_utils.draw_landmarks(image, results.face_landmarks, mp.solutions.face_mesh.FACEMESH_TESSELATION, 
+            drawing_utils.draw_landmarks(image, results.face_landmarks, mp_face_mesh.FACEMESH_TESSELATION, 
                                      drawing_utils.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
                                      drawing_utils.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
         if results.pose_landmarks:
@@ -378,12 +377,7 @@ def get_api_holistic():
     if api_holistic_instance is None:
         with api_holistic_lock:
             if api_holistic_instance is None:
-                try:
-                    import mediapipe.python.solutions as mp_solutions
-                    mp.solutions = mp_solutions
-                except Exception:
-                    pass
-                api_holistic_instance = mp.solutions.holistic.Holistic(
+                api_holistic_instance = mp_holistic.Holistic(
                     min_detection_confidence=0.5, min_tracking_confidence=0.5
                 )
     return api_holistic_instance
@@ -410,8 +404,8 @@ def process_frame():
         annotated_frame = camera_manager.process_frame_data(
             frame, 
             holistic_inst, 
-            mp.solutions.drawing_utils, 
-            mp.solutions.holistic
+            mp_drawing, 
+            mp_holistic
         )
         
         _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
