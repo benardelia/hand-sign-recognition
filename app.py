@@ -13,10 +13,20 @@ import numpy as np
 import threading
 import subprocess
 import mediapipe as mp
-from mediapipe import solutions as mp_solutions
-mp_holistic = mp_solutions.holistic
-mp_drawing = mp_solutions.drawing_utils
-mp_face_mesh = mp_solutions.face_mesh
+try:
+    import mediapipe.python.solutions.holistic as mp_holistic
+    import mediapipe.python.solutions.drawing_utils as mp_drawing
+    import mediapipe.python.solutions.face_mesh as mp_face_mesh
+except Exception:
+    try:
+        from mediapipe import solutions as mp_solutions
+        mp_holistic = mp_solutions.holistic
+        mp_drawing = mp_solutions.drawing_utils
+        mp_face_mesh = mp_solutions.face_mesh
+    except Exception:
+        mp_holistic = getattr(mp, 'solutions').holistic
+        mp_drawing = getattr(mp, 'solutions').drawing_utils
+        mp_face_mesh = getattr(mp, 'solutions').face_mesh
 
 import base64
 from flask import Flask, render_template, Response, jsonify, request
