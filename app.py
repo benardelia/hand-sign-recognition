@@ -66,6 +66,7 @@ class CameraManager:
         self.is_running = False
         self.thread = None
         self.lock = threading.Lock()
+        self.mp_lock = threading.Lock()
         
         # Frame buffers
         self.frame = None
@@ -193,7 +194,8 @@ class CameraManager:
         image.flags.writeable = False
         
         if holistic_instance is not None:
-            results = holistic_instance.process(image)
+            with self.mp_lock:
+                results = holistic_instance.process(image)
         else:
             with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
                 results = holistic.process(image)
@@ -358,9 +360,15 @@ class CameraManager:
             if self.annotated_frame is None:
                 # Return informative placeholder frame if camera is offline/headless
                 img = np.zeros((480, 640, 3), dtype=np.uint8)
-                msg = "No Server Webcam (Client Stream Active)" if not self.is_running else "Starting Camera..."
-                cv2.putText(img, msg, (80, 240), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                if not self.is_running:
+                    cv2.putText(img, "Server Camera Offline", (150, 220), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+                    cv2.putText(img, "Allow Browser Webcam (HTTPS or localhost)", (60, 260), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                else:
+                    cv2.putText(img, "Starting Camera...", (200, 240), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                
                 _, jpeg = cv2.imencode('.jpg', img)
                 return jpeg.tobytes()
                 
