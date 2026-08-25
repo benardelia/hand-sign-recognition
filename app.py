@@ -174,8 +174,11 @@ class CameraManager:
                 if not success:
                     time.sleep(0.03)
                     continue
-                
-                self.process_frame_data(frame, holistic, mp_drawing, mp_holistic)
+
+                try:
+                    self.process_frame_data(frame, holistic, mp_drawing, mp_holistic)
+                except Exception as e:
+                    logger.error(f"Error processing camera frame: {e}")
                 time.sleep(0.01)
 
     def process_frame_data(self, raw_frame, holistic_instance=None, drawing_utils=None, holistic_module=None):
@@ -203,8 +206,8 @@ class CameraManager:
         image.flags.writeable = True
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
-        if results.face_landmarks:
-            drawing_utils.draw_landmarks(image, results.face_landmarks, mp_face_mesh.FACEMESH_TESSELATION, 
+        if results.face_landmarks and mp_face_mesh is not None:
+            drawing_utils.draw_landmarks(image, results.face_landmarks, mp_face_mesh.FACEMESH_TESSELATION,
                                      drawing_utils.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
                                      drawing_utils.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
         if results.pose_landmarks:
@@ -407,21 +410,23 @@ def video_feed():
     return Response(gen(camera_manager),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
-# MediaPipe instance lazily initialized for HTTP client stream processing
-api_holistic_instance = None
-api_holistic_lock = threading.Lock()
+# MediaPipe Holistic is thread-affine: each instance may only be driven by the
+# thread that created it. Under gunicorn's threaded worker, concurrent requests
+# to /api/process_frame land on different threads, so a single shared instance
+# (even behind a lock) is unsafe and can crash or corrupt native state. Give
+# each worker thread its own lazily-created instance instead.
+_api_holistic_local = threading.local()
 
 def get_api_holistic():
-    global api_holistic_instance
     if mp_holistic is None:
         return None
-    if api_holistic_instance is None:
-        with api_holistic_lock:
-            if api_holistic_instance is None:
-                api_holistic_instance = mp_holistic.Holistic(
-                    min_detection_confidence=0.5, min_tracking_confidence=0.5
-                )
-    return api_holistic_instance
+    inst = getattr(_api_holistic_local, 'holistic', None)
+    if inst is None:
+        inst = mp_holistic.Holistic(
+            min_detection_confidence=0.5, min_tracking_confidence=0.5
+        )
+        _api_holistic_local.holistic = inst
+    return inst
 
 @app.route('/api/process_frame', methods=['POST'])
 def process_frame():
