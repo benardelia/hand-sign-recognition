@@ -8,4 +8,4 @@ services:
       - .:/app
     env_file:
       - .env
-    command: python app.py
+    command: gunicorn app:app --bind 0.0.0.0:5001 --workers 1 --threads 2 --timeout 120 --reload
