@@ -1,163 +1,242 @@
-import numpy as np
-import os
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import Callback
-from utils.logger_config import setup_logger
-from utils.normalization import normalize_landmarks, flip_landmarks
+"""
+Train a sign classifier for one quality profile (see config/profiles.json).
 
-# Initialize Logger
+    python train_model.py --profile high
+    python train_model.py --profile all
+
+Every profile trains on the same raw holistic dataset (Data/Holistic_Landmarks,
+(T, 1662) .npy sequences). Output goes to Model/<profile>/:
+    model.keras         Keras model (raw (T, 1662) input, preprocessing inside)
+    model.tflite        mobile model (profiles with export.tflite = true)
+    labels.txt          one label per line, index = class id
+    profile.json        the profile config + training metadata
+    feature_spec.json   landmark selection / normalization description
+"""
+import argparse
+import hashlib
+import json
+import os
+import time
+
+import numpy as np
+import tensorflow as tf
+from sklearn.model_selection import train_test_split
+from tensorflow.keras import layers
+from tensorflow.keras.callbacks import Callback, EarlyStopping
+
+from utils.features import (HOLISTIC_SIZE, augment_sequence, build_feature_spec, get_profile,
+                            load_profiles, make_preprocess_layer, resample_sequence, select_features)
+from utils.logger_config import setup_logger
+
 logger = setup_logger(__name__)
 
-class WebProgressCallback(Callback):
-    def on_epoch_end(self, epoch, logs=None):
-        if logs is None:
-            logs = {}
-        acc = logs.get('categorical_accuracy', 0.0)
-        loss = logs.get('loss', 0.0)
-        val_acc = logs.get('val_categorical_accuracy', 0.0)
-        val_loss = logs.get('val_loss', 0.0)
-        print(f"\nEPOCH_END:{epoch+1}:{acc:.4f}:{loss:.4f}:{val_acc:.4f}:{val_loss:.4f}", flush=True)
-
-# --- CONFIGURATION ---
-DATA_PATH = os.path.join('Data', 'Landmarks') 
-HOLISTIC_DATA_PATH = os.path.join('Data', 'Holistic_Landmarks')
-STATIC_PATH = os.path.join('Data', 'Static')   
+DATA_PATH = os.path.join('Data', 'Holistic_Landmarks')
 MODELS_PATH = 'Model'
-SEQUENCE_LENGTH = 30 
-# INPUT_SHAPE will be determined dynamically
 
-if not os.path.exists(MODELS_PATH):
-    os.makedirs(MODELS_PATH)
 
-def process_sample(res, is_sequence=True):
-    """
-    Normalizes a sample and creates an augmented (flipped) version for 63-shape hand data.
-    Passes through holistic (1662) data without the hand-specific normalization.
-    """
-    processed = []
-    
-    # Check if holistic data
-    is_holistic = res.shape[-1] == 1662
-    
-    if is_sequence:
-        if is_holistic:
-            processed.append(res)
-            # Add simple flip for holistic if needed later, but skip for now
-        else:
-            norm_seq = np.array([normalize_landmarks(frame) for frame in res])
-            processed.append(norm_seq)
-            flip_seq = np.array([flip_landmarks(frame) for frame in norm_seq])
-            processed.append(flip_seq)
+class WebProgressCallback(Callback):
+    """Prints a machine-readable line per epoch; parsed by app.py for the web dashboard."""
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        print(f"\nEPOCH_END:{epoch+1}:{logs.get('categorical_accuracy', 0.0):.4f}:{logs.get('loss', 0.0):.4f}:"
+              f"{logs.get('val_categorical_accuracy', 0.0):.4f}:{logs.get('val_loss', 0.0):.4f}", flush=True)
+
+
+def load_dataset(data_path, sequence_length):
+    labels = sorted(d for d in os.listdir(data_path) if os.path.isdir(os.path.join(data_path, d))) \
+        if os.path.exists(data_path) else []
+    X, y, skipped = [], [], 0
+    for idx, label in enumerate(labels):
+        folder = os.path.join(data_path, label)
+        for fname in sorted(os.listdir(folder)):
+            if not fname.endswith('.npy'):
+                continue
+            seq = np.load(os.path.join(folder, fname))
+            if seq.ndim != 2 or seq.shape[1] != HOLISTIC_SIZE or seq.shape[0] < 2:
+                skipped += 1
+                continue
+            X.append(resample_sequence(seq, sequence_length))
+            y.append(idx)
+    if skipped:
+        logger.warning(f"Skipped {skipped} files that are not (T, {HOLISTIC_SIZE}) holistic sequences.")
+    return np.array(X, dtype=np.float32), np.array(y, dtype=np.int64), labels
+
+
+def build_model(profile, spec, num_classes):
+    t = profile['sequence_length']
+    arch = profile['model']['arch']
+    inp = layers.Input(shape=(t, HOLISTIC_SIZE), name='holistic_sequence')
+    x = make_preprocess_layer(spec)(inp)
+
+    if arch == 'cnn_small':
+        x = layers.Conv1D(64, 3, padding='same', activation='relu')(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Conv1D(64, 3, padding='same', activation='relu')(x)
+        x = layers.GlobalAveragePooling1D()(x)
+        x = layers.Dropout(0.3)(x)
+    elif arch == 'cnn':
+        x = layers.Dense(128, activation='relu')(x)
+        for _ in range(3):
+            r = x
+            x = layers.Conv1D(128, 5, padding='same', activation='relu')(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dropout(0.2)(x)
+            x = layers.Add()([x, r])
+        x = layers.Concatenate()([layers.GlobalAveragePooling1D()(x), layers.GlobalMaxPooling1D()(x)])
+        x = layers.Dense(128, activation='relu')(x)
+        x = layers.Dropout(0.3)(x)
+    elif arch == 'lstm':
+        x = layers.LSTM(128, return_sequences=True)(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.LSTM(128)(x)
+        x = layers.Dropout(0.2)(x)
+        x = layers.Dense(64, activation='relu')(x)
     else:
-        if is_holistic:
-            # Static holistic not supported yet, just pass through repeated
-            seq = np.tile(res, (SEQUENCE_LENGTH, 1))
-            processed.append(seq)
-        else:
-            norm_frame = normalize_landmarks(res)
-            norm_seq = np.tile(norm_frame, (SEQUENCE_LENGTH, 1))
-            processed.append(norm_seq)
-            flip_frame = flip_landmarks(norm_frame)
-            flip_seq = np.tile(flip_frame, (SEQUENCE_LENGTH, 1))
-            processed.append(flip_seq)
-        
-    return processed
+        raise ValueError(f"Unknown model arch '{arch}'")
 
-def load_data():
-    sequences, labels = [], []
-    all_labels = []
-    
-    # 1. Detect all labels
-    if os.path.exists(DATA_PATH):
-        all_labels += [d for d in os.listdir(DATA_PATH) if os.path.isdir(os.path.join(DATA_PATH, d))]
-    if os.path.exists(HOLISTIC_DATA_PATH):
-        all_labels += [d for d in os.listdir(HOLISTIC_DATA_PATH) if d not in all_labels and os.path.isdir(os.path.join(HOLISTIC_DATA_PATH, d))]
-    if os.path.exists(STATIC_PATH):
-        all_labels += [d for d in os.listdir(STATIC_PATH) if d not in all_labels and os.path.isdir(os.path.join(STATIC_PATH, d))]
-    
-    all_labels = sorted(list(set(all_labels)))
-    label_map = {label: i for i, label in enumerate(all_labels)}
-    logger.info(f"Detected Labels: {all_labels}")
-    
-    input_shape = None
-    
-    # Helper to process and append
-    def add_files_from_path(data_path, is_seq=True):
-        nonlocal input_shape
-        if not os.path.exists(data_path): return
-        for label in all_labels:
-            path = os.path.join(data_path, label)
-            if not os.path.exists(path): continue
-            files = [f for f in os.listdir(path) if f.endswith('.npy')]
-            for file in files:
-                res = np.load(os.path.join(path, file))
-                
-                # Determine input shape from the first valid file
-                if input_shape is None:
-                    if is_seq:
-                        input_shape = (SEQUENCE_LENGTH, res.shape[-1])
-                    else:
-                        input_shape = (SEQUENCE_LENGTH, res.shape[0])
-                
-                # Filter by expected sequence length if it's sequence data
-                if is_seq and res.shape[0] != SEQUENCE_LENGTH:
-                    continue
-                # Also filter by expected feature size
-                if (is_seq and res.shape[-1] != input_shape[-1]) or (not is_seq and res.shape[0] != input_shape[-1]):
-                    continue
- 
-                for s in process_sample(res, is_sequence=is_seq):
-                    sequences.append(s)
-                    labels.append(label_map[label])
- 
-    # 2. Load Sequence Data
-    add_files_from_path(HOLISTIC_DATA_PATH, is_seq=True)
-    if input_shape is None:
-        add_files_from_path(DATA_PATH, is_seq=True)
- 
-    # 3. Load Static Data
-    add_files_from_path(STATIC_PATH, is_seq=False)
- 
-    X = np.array(sequences)
-    y = to_categorical(labels).astype(int)
-    
-    with open(os.path.join(MODELS_PATH, 'labels.txt'), 'w') as f:
-        f.write("\n".join(all_labels))
-    
-    return X, y, all_labels, input_shape
- 
-def build_model(num_classes, input_shape):
-    model = Sequential()
-    model.add(LSTM(64, return_sequences=True, activation='tanh', input_shape=input_shape))
-    model.add(Dropout(0.2))
-    model.add(LSTM(128, return_sequences=False, activation='tanh'))
-    model.add(Dropout(0.2))
-    model.add(Dense(64, activation='relu'))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(num_classes, activation='softmax'))
-    
-    model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+    out = layers.Dense(num_classes, activation='softmax', name='probabilities')(x)
+    model = tf.keras.Model(inp, out, name=f"handsign_{profile['name']}")
+    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss='categorical_crossentropy',
+                  metrics=['categorical_accuracy'])
     return model
- 
-def train():
-    logger.info("--- Phase 4: Training Model ---")
-    X, y, all_labels, input_shape = load_data()
-    if len(X) == 0:
-        logger.error("No data found to train on!")
-        return
- 
-    logger.info(f"Determined Input Shape: {input_shape}")
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1)
-    model = build_model(len(all_labels), input_shape)
-    
-    logger.info(f"Dataset Size (with augmentation): {len(X)}")
-    model.fit(X_train, y_train, epochs=150, batch_size=32, validation_data=(X_test, y_test), callbacks=[WebProgressCallback()])
-    
-    model.save(os.path.join(MODELS_PATH, 'hand_model.h5'))
-    logger.info("Training Complete with improved normalization!")
- 
+
+
+def export_tflite(model, profile, path):
+    t = profile['sequence_length']
+    run = tf.function(lambda x: model(x, training=False))
+    concrete = run.get_concrete_function(tf.TensorSpec([1, t, HOLISTIC_SIZE], tf.float32, name='holistic_sequence'))
+    converter = tf.lite.TFLiteConverter.from_concrete_functions([concrete], model)
+    # Builtin ops only: keeps the model loadable by plain LiteRT on Android/iOS (no Flex delegate).
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS]
+    quant = profile['export'].get('quantization', 'none')
+    if quant in ('dynamic_int8', 'float16'):
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    if quant == 'float16':
+        converter.target_spec.supported_types = [tf.float16]
+    data = converter.convert()
+    with open(path, 'wb') as f:
+        f.write(data)
+    return len(data)
+
+
+def tflite_predict(path, X):
+    interp = tf.lite.Interpreter(model_path=path)
+    interp.allocate_tensors()
+    inp, out = interp.get_input_details()[0], interp.get_output_details()[0]
+    preds = []
+    for sample in X:
+        interp.set_tensor(inp['index'], sample[None].astype(np.float32))
+        interp.invoke()
+        preds.append(interp.get_tensor(out['index'])[0])
+    return np.array(preds)
+
+
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def train_profile(name, data_path=DATA_PATH, models_path=MODELS_PATH, seed=42):
+    profile = get_profile(name)
+    spec = build_feature_spec(profile)
+    t = profile['sequence_length']
+    logger.info(f"--- Training profile '{name}': {spec['num_points']} landmarks, "
+                f"{spec['num_features']} features/frame, sequence {t} ---")
+
+    X, y, labels = load_dataset(data_path, t)
+    if len(labels) < 2 or len(X) == 0:
+        logger.error(f"Need at least 2 labels with holistic samples in {data_path}; found {len(labels)}.")
+        return None
+    logger.info(f"Labels: {labels} | samples: {len(X)}")
+
+    stratify = y if np.bincount(y).min() >= 2 else None
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.15, random_state=seed, stratify=stratify)
+
+    rng = np.random.default_rng(seed)
+    aug = profile.get('augment', {})
+    X_aug, y_aug = [X_train], [y_train]
+    for _ in range(int(aug.get('copies', 0))):
+        X_aug.append(np.stack([augment_sequence(s, aug, rng) for s in X_train]))
+        y_aug.append(y_train)
+    X_train, y_train = np.concatenate(X_aug), np.concatenate(y_aug)
+    logger.info(f"Training samples after augmentation: {len(X_train)} | validation: {len(X_val)}")
+
+    num_classes = len(labels)
+    Y_train = tf.keras.utils.to_categorical(y_train, num_classes)
+    Y_val = tf.keras.utils.to_categorical(y_val, num_classes)
+
+    tf.keras.utils.set_random_seed(seed)
+    model = build_model(profile, spec, num_classes)
+    model.fit(X_train, Y_train, validation_data=(X_val, Y_val),
+              epochs=profile['model']['epochs'], batch_size=profile['model']['batch_size'],
+              callbacks=[WebProgressCallback(),
+                         EarlyStopping(monitor='val_loss', patience=25, restore_best_weights=True)],
+              verbose=2)
+
+    val_probs = model.predict(X_val, verbose=0)
+    val_acc = float((val_probs.argmax(-1) == y_val).mean())
+
+    out_dir = os.path.join(models_path, name)
+    os.makedirs(out_dir, exist_ok=True)
+    model.save(os.path.join(out_dir, 'model.keras'))
+
+    metrics = {"val_accuracy": round(val_acc, 4), "num_train": int(len(X_train)), "num_val": int(len(X_val)),
+               "params": int(model.count_params())}
+
+    files = {"keras": "model.keras"}
+    if profile['export'].get('tflite'):
+        tfl_path = os.path.join(out_dir, 'model.tflite')
+        size = export_tflite(model, profile, tfl_path)
+        tfl_probs = tflite_predict(tfl_path, X_val)
+        metrics.update({
+            "tflite_bytes": size,
+            "tflite_val_accuracy": round(float((tfl_probs.argmax(-1) == y_val).mean()), 4),
+            "tflite_max_abs_diff": round(float(np.abs(tfl_probs - val_probs).max()), 5),
+            "tflite_sha256": file_sha256(tfl_path),
+        })
+        files["tflite"] = "model.tflite"
+        logger.info(f"TFLite exported: {size / 1024:.1f} KB, accuracy {metrics['tflite_val_accuracy']:.3f}, "
+                    f"max diff vs Keras {metrics['tflite_max_abs_diff']}")
+
+    # Sanity check: in-graph preprocessing matches the numpy reference used by tooling/tests.
+    pre = tf.keras.Model(model.input, model.get_layer('feature_preprocess').output)
+    ref = np.stack([select_features(s, spec) for s in X_val[:4]])
+    metrics["preprocess_max_abs_diff"] = round(float(np.abs(pre.predict(X_val[:4], verbose=0) - ref).max()), 6)
+
+    with open(os.path.join(out_dir, 'labels.txt'), 'w') as f:
+        f.write("\n".join(labels))
+    with open(os.path.join(out_dir, 'feature_spec.json'), 'w') as f:
+        json.dump(spec, f)
+    version = time.strftime('%Y%m%d-%H%M%S')
+    meta = dict(profile)
+    meta.update({"version": version, "labels": labels, "files": files, "metrics": metrics,
+                 "input": {"name": "holistic_sequence", "shape": [1, t, HOLISTIC_SIZE], "dtype": "float32"},
+                 "output": {"name": "probabilities", "shape": [1, num_classes]}})
+    with open(os.path.join(out_dir, 'profile.json'), 'w') as f:
+        json.dump(meta, f, indent=2)
+
+    logger.info(f"Profile '{name}' done: val accuracy {val_acc:.3f}. Saved to {out_dir} (version {version}).")
+    return meta
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Train sign classifier for a quality profile.")
+    parser.add_argument('--profile', default=None,
+                        help="Profile name from config/profiles.json, or 'all'. Defaults to $PROFILE or the config default.")
+    parser.add_argument('--data', default=DATA_PATH)
+    parser.add_argument('--out', default=MODELS_PATH)
+    parser.add_argument('--seed', type=int, default=42)
+    args = parser.parse_args()
+
+    names = list(load_profiles()['profiles']) if args.profile == 'all' else [get_profile(args.profile)['name']]
+    results = [train_profile(n, args.data, args.out, args.seed) for n in names]
+    if any(r is None for r in results):
+        raise SystemExit(1)
+
+
 if __name__ == "__main__":
-    train()
+    main()
