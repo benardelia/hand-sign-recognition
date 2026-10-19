@@ -36,6 +36,7 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
         if not success:
             logger.error("Failed to capture image from camera.")
             break
+        frame = cv2.flip(frame, 1)  # selfie view, the convention for every collector (see config/profiles.json)
 
         # Recolor feed to RGB
         image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -88,6 +89,7 @@ with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=
             
             for frame_num in range(SEQUENCE_LENGTH):
                 ret, frame = cap.read()
+                frame = cv2.flip(frame, 1)
                 
                 # Recolor feed to RGB
                 image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

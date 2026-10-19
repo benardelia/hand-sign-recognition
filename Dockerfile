@@ -9,17 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required by MediaPipe and OpenCV
+# libgomp1: OpenMP runtime for scikit-learn / TensorFlow. No OpenCV/MediaPipe system libs are
+# needed: landmarks are extracted in the browser / phone app, the server only handles numbers.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libgl1 \
-    libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender1 \
     libgomp1 \
-    libegl1 \
-    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install python dependencies

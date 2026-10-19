@@ -79,6 +79,13 @@ def build_feature_spec(profile):
         base = POSE_OFFSET + lm * POSE_STRIDE
         return [base, base + 1, base + 2]
 
+    # Pose z is a weak depth guess that differs a lot between MediaPipe graphs
+    # (legacy Holistic vs Tasks, see tools/parity_check.py), so it can be masked out.
+    use_pose_z = bool(profile.get('use_pose_z', True))
+    feature_mask = []
+    for p in points:
+        feature_mask += [1.0, 1.0, 1.0 if (use_pose_z or p["group"] != "pose") else 0.0]
+
     return {
         "raw_frame_size": HOLISTIC_SIZE,
         "sequence_length": profile['sequence_length'],
@@ -86,6 +93,7 @@ def build_feature_spec(profile):
         "num_features": len(points) * 3,
         "points": points,
         "columns": [c for p in points for c in p["cols"]],
+        "feature_mask": feature_mask,
         "normalize": bool(profile.get('normalize', True)),
         "normalization": {
             "method": "shoulder_center_scale",
@@ -103,9 +111,10 @@ def select_features(seq, spec):
     """numpy reference of FeaturePreprocess. seq: (T, 1662) -> (T, num_features)."""
     seq = np.asarray(seq, dtype=np.float32)
     t = seq.shape[0]
+    mask = np.asarray(spec['feature_mask'], np.float32)
     pts = seq[:, spec['columns']].reshape(t, -1, 3)
     if not spec['normalize']:
-        return pts.reshape(t, -1)
+        return pts.reshape(t, -1) * mask
 
     norm = spec['normalization']
     ls = seq[:, norm['left_shoulder_cols']]
@@ -118,7 +127,7 @@ def select_features(seq, spec):
     present = np.abs(pts).max(axis=-1, keepdims=True) > 0
     out = (pts - center[:, None, :]) / scale[:, None, None]
     out = np.where(present, out, 0.0)
-    return out.reshape(t, -1).astype(np.float32)
+    return (out.reshape(t, -1) * mask).astype(np.float32)
 
 
 def resample_sequence(seq, length):
@@ -171,7 +180,7 @@ def mirror_holistic(seq):
 
 
 def augment_sequence(seq, aug, rng):
-    """Random time warp + optional mirror + coordinate noise on a raw (T, 1662) sequence."""
+    """Random time warp, mirror, face dropout and coordinate noise on a raw (T, 1662) sequence."""
     length = seq.shape[0]
     warp = aug.get('time_warp', 0.0)
     if warp:
@@ -179,6 +188,10 @@ def augment_sequence(seq, aug, rng):
         seq = resample_sequence(resample_sequence(seq, n), length)
     if aug.get('mirror') and rng.random() < 0.5:
         seq = mirror_holistic(seq)
+    if rng.random() < aug.get('drop_face', 0.0):
+        # The Tasks graph (browser/phone) misses the face more often than legacy Holistic.
+        seq = seq.copy()
+        seq[:, FACE_OFFSET:FACE_OFFSET + FACE_COUNT * FACE_STRIDE] = 0
     noise = aug.get('noise', 0.0)
     if noise:
         seq = np.where(seq != 0, seq + rng.normal(0, noise, seq.shape).astype(np.float32), 0.0)
@@ -191,6 +204,7 @@ def make_preprocess_layer(spec):
     norm = spec['normalization']
     return FeaturePreprocess(
         columns=spec['columns'],
+        feature_mask=spec['feature_mask'],
         normalize=spec['normalize'],
         left_shoulder_cols=norm['left_shoulder_cols'],
         right_shoulder_cols=norm['right_shoulder_cols'],

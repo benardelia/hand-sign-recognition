@@ -7,9 +7,10 @@ class FeaturePreprocess(tf.keras.layers.Layer):
     """(B, T, 1662) raw holistic frames -> (B, T, num_features) selected, normalized features."""
 
     def __init__(self, columns, normalize, left_shoulder_cols, right_shoulder_cols,
-                 default_center, default_scale, **kwargs):
+                 default_center, default_scale, feature_mask=None, **kwargs):
         super().__init__(**kwargs)
         self.columns = list(columns)
+        self.feature_mask = list(feature_mask) if feature_mask is not None else [1.0] * len(self.columns)
         self.normalize = bool(normalize)
         self.left_shoulder_cols = list(left_shoulder_cols)
         self.right_shoulder_cols = list(right_shoulder_cols)
@@ -18,9 +19,10 @@ class FeaturePreprocess(tf.keras.layers.Layer):
         self.num_points = len(self.columns) // 3
 
     def call(self, x):
+        mask = tf.constant(self.feature_mask, x.dtype)
         pts = tf.gather(x, self.columns, axis=-1)
         if not self.normalize:
-            return pts
+            return pts * mask
         shape = tf.shape(x)
         pts = tf.reshape(pts, [shape[0], shape[1], self.num_points, 3])
 
@@ -38,7 +40,7 @@ class FeaturePreprocess(tf.keras.layers.Layer):
         present = tf.reduce_max(tf.abs(pts), axis=-1, keepdims=True) > 0
         out = (pts - center[:, :, None, :]) / scale[:, :, None, :]
         out = tf.where(present, out, tf.zeros_like(out))
-        return tf.reshape(out, [shape[0], shape[1], self.num_points * 3])
+        return tf.reshape(out, [shape[0], shape[1], self.num_points * 3]) * mask
 
     def compute_output_shape(self, input_shape):
         return (input_shape[0], input_shape[1], len(self.columns))
@@ -47,6 +49,7 @@ class FeaturePreprocess(tf.keras.layers.Layer):
         cfg = super().get_config()
         cfg.update({
             "columns": self.columns,
+            "feature_mask": self.feature_mask,
             "normalize": self.normalize,
             "left_shoulder_cols": self.left_shoulder_cols,
             "right_shoulder_cols": self.right_shoulder_cols,

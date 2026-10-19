@@ -11,7 +11,7 @@
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js for live training plots -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <!-- Custom Style -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
@@ -57,11 +57,11 @@
             <div class="sidebar-footer">
                 <div class="status-indicator">
                     <span class="dot pulse green" id="sys-status-dot"></span>
-                    <span id="sys-status-text">Webcam Active</span>
+                    <span id="sys-status-text">Starting...</span>
                 </div>
                 <div class="model-badge">
                     <i class="fa-solid fa-circle-nodes"></i>
-                    <span id="active-model-name">Holistic (1662)</span>
+                    <span id="active-model-name">Loading model...</span>
                 </div>
             </div>
         </aside>
@@ -75,6 +75,12 @@
                     <p id="current-tab-subtitle">Real-time status, labels inventory, and models overview.</p>
                 </div>
                 <div class="header-actions">
+                    <div class="camera-widget glass" title="Quality profile: camera resolution, landmarks and model size">
+                        <i class="fa-solid fa-sliders"></i>
+                        <select id="profile-select" class="camera-select-dropdown">
+                            <option value="">Loading profiles...</option>
+                        </select>
+                    </div>
                     <div class="camera-widget glass">
                         <i class="fa-solid fa-video"></i>
                         <select id="camera-source-select" class="camera-select-dropdown" onchange="changeCameraSource(this.value)">
@@ -115,7 +121,7 @@
                         </div>
                         <div class="stat-details">
                             <h3 id="stat-model-loaded">Checking...</h3>
-                            <p>LSTM Model Status</p>
+                            <p>Trained Quality Profiles</p>
                         </div>
                     </div>
                     <div class="stat-card green-gradient">
@@ -123,8 +129,8 @@
                             <i class="fa-solid fa-bolt"></i>
                         </div>
                         <div class="stat-details">
-                            <h3>~30 FPS</h3>
-                            <p>Camera Performance</p>
+                            <h3 id="stat-fps">-</h3>
+                            <p>Landmark Tracking Speed</p>
                         </div>
                     </div>
                 </div>
@@ -132,7 +138,7 @@
                 <div class="overview-grid">
                     <div class="overview-card info-card glass">
                         <h3>Welcome to ScribeSign AI</h3>
-                        <p>This is a high-performance **MediaPipe Holistic** and **LSTM Neural Network** computer vision engine designed to translate complex sign language motions (incorporating face mesh, body pose, and both hands) directly into coherent English speech and sentences.</p>
+                        <p>Hand, body and face landmarks are tracked with <strong>MediaPipe Holistic</strong> directly in your browser - no video leaves your device. Recorded landmark sequences train small models for each quality profile: <strong>LOW</strong> and <strong>HIGH</strong> run on phones (smart-glasses app), <strong>EXPERIMENTAL</strong> runs on a powerful PC.</p>
                         
                         <div class="quick-actions">
                             <h4>Quick Actions</h4>
@@ -147,6 +153,29 @@
                                     <i class="fa-solid fa-brain"></i> Train Model
                                 </button>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="overview-card signs-list-card glass">
+                        <div class="card-header-flex">
+                            <h3>Quality Profiles &amp; Models</h3>
+                        </div>
+                        <div class="inventory-table-wrapper">
+                            <table class="inventory-table">
+                                <thead>
+                                    <tr>
+                                        <th>Profile</th>
+                                        <th>Version</th>
+                                        <th>Val Accuracy</th>
+                                        <th>Mobile Model</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="models-tbody">
+                                    <tr>
+                                        <td colspan="4" class="text-center text-muted">Loading models...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
@@ -252,7 +281,7 @@
                     <!-- Left: Control & Collection Screen -->
                     <div class="builder-controls-card glass">
                         <h3>Record Landmark Sequences</h3>
-                        <p class="text-muted small">Enter a custom word/label. Pressing **Record** will start a 3-second visual countdown and capture exactly **30 frames** of holistic landmarks.</p>
+                        <p class="text-muted small">Enter a word/label. Pressing <strong>Record</strong> starts a 3-second countdown, then captures about <strong>1 second</strong> of holistic landmarks. Landmarks are extracted in your browser and only the numbers are uploaded.</p>
                         
                         <div class="camera-container-small">
                             <img id="webcam-feed-builder" src="" alt="Webcam Feed Loading..." class="feed-img">
@@ -286,7 +315,7 @@
                                 <li>Ensure your entire face, shoulders, and both hands are clearly visible in the camera frame.</li>
                                 <li>Perform the gesture continuously throughout the recording period.</li>
                                 <li>Try varying camera angles and hand positions slightly in each sequence to achieve a highly robust model.</li>
-                                <li>Aim for at least **15-20 sequences per sign** for reliable accuracy.</li>
+                                <li>Aim for at least <strong>15-20 sequences per sign</strong> for reliable accuracy - from several people, devices and lighting conditions.</li>
                             </ul>
                         </div>
                     </div>
@@ -312,17 +341,24 @@
                 <div class="trainer-layout">
                     <!-- Left Panel: Parameters and Control -->
                     <div class="trainer-controls glass">
-                        <h3>LSTM Training Dashboard</h3>
-                        <p class="text-muted small">Fine-tune training options and trigger network training over collected landmarks. This process will disable real-time inference temporarily.</p>
+                        <h3>Training Dashboard</h3>
+                        <p class="text-muted small">Every profile trains on the same collected landmarks. LOW/HIGH also export a TFLite model for the phone app; EXPERIMENTAL is a larger PC-only model.</p>
+
+                        <div class="form-group">
+                            <label for="train-profile">Quality Profile</label>
+                            <select id="train-profile" class="form-select">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
 
                         <div class="form-group-row">
                             <div class="form-group">
                                 <label for="train-epochs">Epochs</label>
-                                <input type="number" id="train-epochs" value="150" min="10" max="1000">
+                                <input type="number" id="train-epochs" placeholder="profile default" min="10" max="1000">
                             </div>
                             <div class="form-group">
                                 <label for="train-batch">Batch Size</label>
-                                <input type="number" id="train-batch" value="32" min="8" max="256">
+                                <input type="number" id="train-batch" placeholder="profile default" min="8" max="256">
                             </div>
                         </div>
 
@@ -411,11 +447,8 @@
         </main>
     </div>
 
-    <!-- Hidden HTML5 Video & Canvas for Browser Client Webcam Capture -->
-    <video id="client-webcam-video" style="display:none;" autoplay playsinline muted></video>
-    <canvas id="client-webcam-canvas" style="display:none;"></canvas>
-
     <!-- Script loading -->
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/pipeline.js') }}"></script>
 </body>
 </html>

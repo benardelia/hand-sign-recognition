@@ -1,5 +1,11 @@
 {
   "default_profile": "high",
+  "dataset": {
+    "record_seconds": 1.0,
+    "countdown_seconds": 3,
+    "mirrored": true,
+    "note": "Every client mirrors the camera frame (selfie view) before landmark extraction, and records ~record_seconds of frames per sample."
+  },
   "profiles": {
     "low": {
       "description": "Glasses camera -> mid-range phone. Hands + 7 upper-body points.",
@@ -13,7 +19,8 @@
         "right_hand": "all"
       },
       "normalize": true,
-      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "copies": 3},
+      "use_pose_z": false,
+      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "drop_face": 0.0, "copies": 3},
       "model": {"arch": "cnn_small", "epochs": 120, "batch_size": 32},
       "export": {"tflite": true, "quantization": "dynamic_int8"}
     },
@@ -32,7 +39,8 @@
         "right_hand": "all"
       },
       "normalize": true,
-      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "copies": 3},
+      "use_pose_z": false,
+      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "drop_face": 0.25, "copies": 3},
       "model": {"arch": "cnn", "epochs": 150, "batch_size": 32},
       "export": {"tflite": true, "quantization": "float16"}
     },
@@ -48,7 +56,8 @@
         "right_hand": "all"
       },
       "normalize": true,
-      "augment": {"mirror": false, "time_warp": 0.2, "noise": 0.005, "copies": 2},
+      "use_pose_z": false,
+      "augment": {"mirror": false, "time_warp": 0.2, "noise": 0.005, "drop_face": 0.25, "copies": 2},
       "model": {"arch": "lstm", "epochs": 150, "batch_size": 32},
       "export": {"tflite": false, "quantization": "none"}
     }

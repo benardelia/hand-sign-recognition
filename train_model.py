@@ -140,8 +140,13 @@ def file_sha256(path):
     return h.hexdigest()
 
 
-def train_profile(name, data_path=DATA_PATH, models_path=MODELS_PATH, seed=42):
+def train_profile(name, data_path=DATA_PATH, models_path=MODELS_PATH, seed=42, epochs=None, batch_size=None):
     profile = get_profile(name)
+    profile['model'] = dict(profile['model'])
+    if epochs:
+        profile['model']['epochs'] = epochs
+    if batch_size:
+        profile['model']['batch_size'] = batch_size
     spec = build_feature_spec(profile)
     t = profile['sequence_length']
     logger.info(f"--- Training profile '{name}': {spec['num_points']} landmarks, "
@@ -230,10 +235,12 @@ def main():
     parser.add_argument('--data', default=DATA_PATH)
     parser.add_argument('--out', default=MODELS_PATH)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--epochs', type=int, default=None, help="Override the profile's epochs")
+    parser.add_argument('--batch-size', type=int, default=None, help="Override the profile's batch size")
     args = parser.parse_args()
 
     names = list(load_profiles()['profiles']) if args.profile == 'all' else [get_profile(args.profile)['name']]
-    results = [train_profile(n, args.data, args.out, args.seed) for n in names]
+    results = [train_profile(n, args.data, args.out, args.seed, args.epochs, args.batch_size) for n in names]
     if any(r is None for r in results):
         raise SystemExit(1)
 

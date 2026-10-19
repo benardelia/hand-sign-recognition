@@ -1,802 +1,440 @@
-import os
-os.environ["OPENCV_LOG_LEVEL"] = "OFF"
-os.environ["OPENCV_VIDEOIO_PRIORITY_MSMF"] = "0"
+"""
+ScribeSign web hub: data collection, training and model distribution.
 
-import cv2
-if hasattr(cv2, 'setLogLevel'):
-    cv2.setLogLevel(0)
+Landmarks are extracted on the client (browser: static/js/pipeline.js, phone:
+Flutter app), so the server only receives numbers:
+  POST /api/samples          save a recorded (T, 1662) sequence + metadata
+  POST /api/stream/frames    live translation for one session (binary float32 frames)
+  POST /api/predict          classify one full sequence
+  GET  /api/models           trained profiles; files under /api/models/<profile>/<file>
+  POST /api/train            train a profile (streams logs on /stream_train_logs)
 
-import time
-import json
-import sys
-import numpy as np
-import threading
-import subprocess
-import mediapipe as mp
-
-# Safe MediaPipe Solutions resolver
-mp_holistic = None
-mp_drawing = None
-mp_face_mesh = None
-
-try:
-    from mediapipe.python.solutions import holistic as mp_holistic
-    from mediapipe.python.solutions import drawing_utils as mp_drawing
-    from mediapipe.python.solutions import face_mesh as mp_face_mesh
-except Exception:
-    try:
-        from mediapipe import solutions as mp_solutions
-        mp_holistic = mp_solutions.holistic
-        mp_drawing = mp_solutions.drawing_utils
-        mp_face_mesh = mp_solutions.face_mesh
-    except Exception:
-        mp_solutions = getattr(mp, 'solutions', None)
-        if mp_solutions is not None:
-            mp_holistic = getattr(mp_solutions, 'holistic', None)
-            mp_drawing = getattr(mp_solutions, 'drawing_utils', None)
-            mp_face_mesh = getattr(mp_solutions, 'face_mesh', None)
-
+LOCAL_CAMERA=1 additionally enables the host's own webcam (local_camera.py).
+"""
 import base64
-from flask import Flask, render_template, Response, jsonify, request
-from tensorflow.keras.models import load_model
+import functools
+import hmac
+import json
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
 
+import numpy as np
+from flask import Flask, Response, abort, jsonify, render_template, request, send_from_directory
+
+from utils.dataset import (DATA_PATH, dataset_summary, delete_sample, load_meta, normalize_label,
+                           save_sample)
+from utils.features import HOLISTIC_SIZE, get_profile, load_profiles, resample_sequence
+from utils.inference import MODELS_PATH, trained_profiles
 from utils.logger_config import setup_logger
-from utils.holistic_utils import extract_holistic_keypoints
-from utils.translator import translator
+from utils.sessions import SessionStore, parse_frames
 
-# Initialize Logger
 logger = setup_logger(__name__)
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 4 * 1024 * 1024
 
-# --- CONFIGURATION ---
-MODEL_PATH = os.path.join('Model', 'hand_model.h5')
-LABELS_PATH = os.path.join('Model', 'labels.txt')
-DATA_PATH = os.path.join('Data', 'Holistic_Landmarks')
-SEQUENCE_LENGTH = 30
-STABILITY_FRAMES = 5
 PORT = 5001
+LOCAL_CAMERA = os.environ.get('LOCAL_CAMERA', '0') == '1'
+ADMIN_TOKEN = os.environ.get('ADMIN_TOKEN', '')      # required for delete/train when set
+COLLECT_TOKEN = os.environ.get('COLLECT_TOKEN', '')  # required for sample upload when set
+MODEL_FILES = {'model.tflite', 'labels.txt', 'profile.json', 'feature_spec.json'}
 
-if not os.path.exists(DATA_PATH):
-    os.makedirs(DATA_PATH)
+MEDIAPIPE_VERSION = '0.10.14'
+MEDIAPIPE = {
+    "bundle": f"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@{MEDIAPIPE_VERSION}/vision_bundle.mjs",
+    "wasm": f"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@{MEDIAPIPE_VERSION}/wasm",
+    "model": "https://storage.googleapis.com/mediapipe-models/holistic_landmarker/"
+             "holistic_landmarker/float16/latest/holistic_landmarker.task",
+}
 
-class CameraManager:
-    def __init__(self):
-        self.cap = None
-        self.is_running = False
-        self.thread = None
-        self.lock = threading.Lock()
-        self.mp_lock = threading.Lock()
-        
-        # Frame buffers
-        self.frame = None
-        self.annotated_frame = None
-        
-        # ML Model and labels
-        self.model = None
-        self.labels = []
-        self.expected_shape = 1662
-        self.model_loaded = False
-        self.load_ml_model()
-        
-        # Prediction states
-        self.sequence = []
-        self.gloss_buffer = []
-        self.current_sentence = "Start signing..."
-        self.last_prediction = ""
-        self.confidence = 0.0
-        self.action_counter = 0
-        self.threshold = 0.85
-        
-        # Recording states
-        self.recording_label = None
-        self.recording_status = "idle"  # "idle", "countdown", "recording", "saved"
-        self.recording_frames_collected = 0
-        self.recording_sequence = []
-        self.countdown_start_time = 0
-        self.countdown_duration = 3.0 # seconds
-        
-        # Stream tracking
-        self.last_client_frame_time = 0
-        self.camera_index = 0
-        self.camera_needs_switch = False
-        self.pending_camera_index = 0
-        
-    def load_ml_model(self):
-        try:
-            if os.path.exists(MODEL_PATH) and os.path.exists(LABELS_PATH):
-                self.model = load_model(MODEL_PATH)
-                self.expected_shape = self.model.input_shape[-1]
-                with open(LABELS_PATH, 'r') as f:
-                    self.labels = f.read().splitlines()
-                self.model_loaded = True
-                logger.info(f"Model loaded successfully. Labels: {self.labels}. Expected feature size: {self.expected_shape}")
-            else:
-                self.model_loaded = False
-                logger.info("No trained model or labels found in Model/ folder. Real-time translation is paused until a model is trained via the Web Dashboard.")
-        except Exception as e:
-            self.model_loaded = False
-            logger.error(f"Failed to load model: {e}")
-            
-    def reload_model(self):
-        with self.lock:
-            self.load_ml_model()
-            self.sequence = []
-            self.gloss_buffer = []
-            self.current_sentence = "Model reloaded. Start signing..."
-            self.last_prediction = ""
-            self.confidence = 0.0
-            
-    def start(self):
-        if not self.is_running:
-            self.is_running = True
-            self.thread = threading.Thread(target=self._run, daemon=True)
-            self.thread.start()
-            logger.info("CameraManager thread started.")
-            
-    def stop(self):
-        self.is_running = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
-        logger.info("CameraManager thread stopped.")
-        
-    def _run(self):
-        # Initialize camera in the thread
-        self.cap = cv2.VideoCapture(self.camera_index)
-        if not self.cap.isOpened():
-            logger.warning("No hardware webcam detected on server (Headless/VPS environment). Local camera capture is disabled.")
-            self.is_running = False
-            return
-            
-        if mp_holistic is None:
-            logger.error("MediaPipe holistic module is not available. Local camera capture disabled.")
-            self.is_running = False
-            return
-            
-        with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-            while self.is_running:
-                # Check for camera switch request
-                if self.camera_needs_switch:
-                    logger.info(f"CameraManager thread switching to camera index: {self.pending_camera_index}")
-                    if self.cap and self.cap.isOpened():
-                        self.cap.release()
-                    self.camera_index = self.pending_camera_index
-                    self.cap = cv2.VideoCapture(self.camera_index)
-                    self.camera_needs_switch = False
-                    if not self.cap.isOpened():
-                        logger.error(f"Failed to open camera index {self.camera_index}. Reverting to 0.")
-                        self.camera_index = 0
-                        self.cap = cv2.VideoCapture(0)
-                        
-                success, frame = self.cap.read()
-                if not success:
-                    time.sleep(0.03)
-                    continue
+os.makedirs(DATA_PATH, exist_ok=True)
 
-                try:
-                    self.process_frame_data(frame, holistic, mp_drawing, mp_holistic)
-                except Exception as e:
-                    logger.error(f"Error processing camera frame: {e}")
-                time.sleep(0.01)
+sessions = SessionStore()
+local_camera = None
+if LOCAL_CAMERA:
+    try:
+        from local_camera import LocalCamera
+        local_camera = LocalCamera(record_seconds=load_profiles()['dataset']['record_seconds'])
+    except Exception as e:
+        logger.error(f"LOCAL_CAMERA=1 but local camera mode failed to initialize: {e}")
 
-    def process_frame_data(self, raw_frame, holistic_instance=None, drawing_utils=None, holistic_module=None):
-        if drawing_utils is None:
-            drawing_utils = mp_drawing
-        if holistic_module is None:
-            holistic_module = mp_holistic
-            
-        if drawing_utils is None or holistic_module is None:
-            return raw_frame
-            
-        frame = cv2.flip(raw_frame, 1)
-        self.frame = frame.copy()
-        
-        image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        image.flags.writeable = False
-        
-        if holistic_instance is not None:
-            with self.mp_lock:
-                results = holistic_instance.process(image)
-        else:
-            with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-                results = holistic.process(image)
-                
-        image.flags.writeable = True
-        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-        
-        if results.face_landmarks and mp_face_mesh is not None:
-            drawing_utils.draw_landmarks(image, results.face_landmarks, mp_face_mesh.FACEMESH_TESSELATION,
-                                     drawing_utils.DrawingSpec(color=(80,110,10), thickness=1, circle_radius=1),
-                                     drawing_utils.DrawingSpec(color=(80,256,121), thickness=1, circle_radius=1))
-        if results.pose_landmarks:
-            drawing_utils.draw_landmarks(image, results.pose_landmarks, holistic_module.POSE_CONNECTIONS)
-        if results.left_hand_landmarks:
-            drawing_utils.draw_landmarks(image, results.left_hand_landmarks, holistic_module.HAND_CONNECTIONS)
-        if results.right_hand_landmarks:
-            drawing_utils.draw_landmarks(image, results.right_hand_landmarks, holistic_module.HAND_CONNECTIONS)
-        
-        keypoints = extract_holistic_keypoints(results)
-        
-        with self.lock:
-            if self.recording_status == "countdown":
-                elapsed = time.time() - self.countdown_start_time
-                remaining = max(0.0, self.countdown_duration - elapsed)
-                
-                h, w, _ = image.shape
-                cv2.rectangle(image, (0, 0), (w, h), (0, 0, 0), 2)
-                overlay = image.copy()
-                cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.4, image, 0.6, 0, image)
-                
-                text = f"{int(remaining) + 1}" if remaining > 0 else "GO!"
-                cv2.putText(image, text, (int(w/2) - 30, int(h/2) + 20), 
-                            cv2.FONT_HERSHEY_DUPLEX, 3.0, (0, 255, 255), 5, cv2.LINE_AA)
-                cv2.putText(image, f"Prepare sign: '{self.recording_label}'", (20, h - 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                
-                if elapsed >= self.countdown_duration:
-                    self.recording_status = "recording"
-                    self.recording_frames_collected = 0
-                    self.recording_sequence = []
-                    logger.info("Recording started...")
-                    
-            elif self.recording_status == "recording":
-                self.recording_sequence.append(keypoints)
-                self.recording_frames_collected += 1
-                
-                h, w, _ = image.shape
-                cv2.rectangle(image, (0, 0), (w, h), (0, 0, 255), 3)
-                cv2.putText(image, "RECORDING...", (15, 40), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                cv2.putText(image, f"Frame: {self.recording_frames_collected}/{SEQUENCE_LENGTH}", (15, 80), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                
-                progress_w = int((self.recording_frames_collected / SEQUENCE_LENGTH) * (w - 40))
-                cv2.rectangle(image, (20, h - 30), (w - 20, h - 15), (50, 50, 50), -1)
-                cv2.rectangle(image, (20, h - 30), (20 + progress_w, h - 15), (0, 0, 255), -1)
-                
-                if self.recording_frames_collected >= SEQUENCE_LENGTH:
-                    self.recording_status = "saving"
-                    threading.Thread(target=self._save_recording, daemon=True).start()
-                    
-            elif self.recording_status == "saved":
-                h, w, _ = image.shape
-                cv2.rectangle(image, (0, 0), (w, h), (0, 255, 0), 3)
-                cv2.putText(image, "SEQUENCE SAVED!", (int(w/2) - 150, int(h/2)), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-                
-            elif self.model_loaded:
-                self.sequence.append(keypoints)
-                self.sequence = self.sequence[-SEQUENCE_LENGTH:]
-                
-                if len(self.sequence) == SEQUENCE_LENGTH:
-                    input_data = np.expand_dims(self.sequence, axis=0)
-                    
-                    if self.expected_shape == 1662:
-                        res = self.model.predict(input_data, verbose=0)[0]
-                        index = np.argmax(res)
-                        confidence = res[index]
-                        self.confidence = float(confidence)
-                        
-                        if confidence > self.threshold:
-                            detected_word = self.labels[index]
-                            
-                            if detected_word == self.last_prediction:
-                                self.action_counter += 1
-                            else:
-                                self.action_counter = 0
-                                self.last_prediction = detected_word
-                            
-                            if self.action_counter == STABILITY_FRAMES:
-                                if not self.gloss_buffer or self.gloss_buffer[-1] != detected_word:
-                                    self.gloss_buffer.append(detected_word)
-                                    self.gloss_buffer = self.gloss_buffer[-5:]
-                                    self.current_sentence = translator.translate(self.gloss_buffer)
-                                    logger.info(f"Detected gloss: {detected_word} | Reconstructed sentence: {self.current_sentence}")
-                                self.action_counter = 0
-                                
-                            cv2.putText(image, f"{detected_word} ({int(confidence*100)}%)", (15, 45), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                    else:
-                        cv2.putText(image, "Error: Model shape mismatch.", (15, 45), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
-        self.annotated_frame = image.copy()
-        return image
-
-    def _save_recording(self):
-        try:
-            target_dir = os.path.join(DATA_PATH, self.recording_label)
-            if not os.path.exists(target_dir):
-                os.makedirs(target_dir)
-                
-            timestamp = int(time.time() * 1000)
-            file_path = os.path.join(target_dir, f"holistic_seq_{timestamp}.npy")
-            np.save(file_path, np.array(self.recording_sequence))
-            logger.info(f"Successfully saved landmark sequence: {file_path}")
-            
-            with self.lock:
-                self.recording_status = "saved"
-            
-            # Keep "saved" display for 1.5 seconds, then return to idle
-            time.sleep(1.5)
-            
-            with self.lock:
-                self.recording_status = "idle"
-                self.recording_label = None
-                self.recording_sequence = []
-        except Exception as e:
-            logger.error(f"Error saving recording: {e}")
-            with self.lock:
-                self.recording_status = "idle"
-                self.recording_label = None
-
-    def start_recording(self, label):
-        with self.lock:
-            has_active_stream = self.is_running or (time.time() - self.last_client_frame_time < 4.0)
-            if not has_active_stream:
-                logger.warning("Attempted to start recording without active camera stream.")
-                return False, "No active camera stream detected. Please ensure your browser webcam is allowed and active (HTTPS required for browser webcam)."
-                
-            if self.recording_status == "idle":
-                self.recording_label = label
-                self.recording_status = "countdown"
-                self.countdown_start_time = time.time()
-                self.recording_sequence = []
-                self.recording_frames_collected = 0
-                logger.info(f"Initiated countdown for recording label: {label}")
-                return True, f"Countdown started for '{label}'"
-            return False, f"Camera is busy recording (current status: {self.recording_status})."
-
-    def clear_sentence(self):
-        with self.lock:
-            self.gloss_buffer = []
-            self.current_sentence = "Sentence Cleared."
-            self.last_prediction = ""
-            self.confidence = 0.0
-            logger.info("Sentence buffer cleared.")
-
-    def get_jpeg_frame(self):
-        with self.lock:
-            if self.annotated_frame is None:
-                # Return informative placeholder frame if camera is offline/headless
-                img = np.zeros((480, 640, 3), dtype=np.uint8)
-                if not self.is_running:
-                    cv2.putText(img, "Server Camera Offline", (150, 220), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-                    cv2.putText(img, "Allow Browser Webcam (HTTPS or localhost)", (60, 260), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-                else:
-                    cv2.putText(img, "Starting Camera...", (200, 240), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                
-                _, jpeg = cv2.imencode('.jpg', img)
-                return jpeg.tobytes()
-                
-            _, jpeg = cv2.imencode('.jpg', self.annotated_frame)
-            return jpeg.tobytes()
-
-# Global camera manager instance
-camera_manager = CameraManager()
-
-# Global variables for training logs streaming
 training_process = None
-training_logs = []
+training_profile = None
+training_lock = threading.Lock()
 
-def get_sign_directories():
-    if not os.path.exists(DATA_PATH):
-        return []
-    dirs = [d for d in os.listdir(DATA_PATH) if os.path.isdir(os.path.join(DATA_PATH, d))]
-    return sorted(dirs)
 
-# --- SERVER ROUTES ---
+def require_token(kind):
+    """Optional shared-secret check (X-Handsign-Token header) for public deployments."""
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            expected = ADMIN_TOKEN if kind == 'admin' else COLLECT_TOKEN
+            given = request.headers.get('X-Handsign-Token', '')
+            if expected and not hmac.compare_digest(given, expected):
+                return jsonify({"status": "error", "message": "Token required", "token_required": kind}), 401
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def error(message, code=400):
+    return jsonify({"status": "error", "message": message}), code
+
+
+def inside_data_path(path):
+    abs_data = os.path.abspath(DATA_PATH)
+    abs_path = os.path.abspath(path or '')
+    return abs_path if abs_path.startswith(abs_data + os.sep) else None
+
+
+def decode_frames(payload):
+    """Accepts {"frames_b64": base64 float32 LE} or {"frames": [[...1662], ...]}."""
+    if payload.get('frames_b64'):
+        raw = base64.b64decode(payload['frames_b64'])
+        if len(raw) % (HOLISTIC_SIZE * 4):
+            raise ValueError(f"frames_b64 must hold N x {HOLISTIC_SIZE} float32 values")
+        return np.frombuffer(raw, dtype='<f4').reshape(-1, HOLISTIC_SIZE)
+    return np.asarray(payload.get('frames', []), dtype=np.float32)
+
+
+# --- PAGES & CONFIG ---
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-def gen(camera):
-    while True:
-        frame = camera.get_jpeg_frame()
-        yield (b'--frame\r\n'
-               b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n\r\n')
-        time.sleep(0.03) # ~30 FPS
 
-@app.route('/video_feed')
-def video_feed():
-    camera_manager.start()
-    return Response(gen(camera_manager),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/api/config')
+def get_config():
+    cfg = load_profiles()
+    trained = trained_profiles()
+    profiles = {}
+    for name, p in cfg['profiles'].items():
+        meta = trained.get(name, {})
+        profiles[name] = {"description": p['description'], "target": p['target'], "camera": p['camera'],
+                          "sequence_length": p['sequence_length'], "trained": name in trained,
+                          "version": meta.get('version'), "metrics": meta.get('metrics')}
+    return jsonify({"local_camera": local_camera is not None, "default_profile": cfg['default_profile'],
+                    "dataset": cfg['dataset'], "profiles": profiles, "mediapipe": MEDIAPIPE,
+                    "collect_token_required": bool(COLLECT_TOKEN), "admin_token_required": bool(ADMIN_TOKEN)})
 
-# MediaPipe Holistic is thread-affine: each instance may only be driven by the
-# thread that created it. Under gunicorn's threaded worker, concurrent requests
-# to /api/process_frame land on different threads, so a single shared instance
-# (even behind a lock) is unsafe and can crash or corrupt native state. Give
-# each worker thread its own lazily-created instance instead.
-_api_holistic_local = threading.local()
 
-def get_api_holistic():
-    if mp_holistic is None:
-        return None
-    inst = getattr(_api_holistic_local, 'holistic', None)
-    if inst is None:
-        inst = mp_holistic.Holistic(
-            min_detection_confidence=0.5, min_tracking_confidence=0.5
-        )
-        _api_holistic_local.holistic = inst
-    return inst
+# --- DATA COLLECTION ---
 
-@app.route('/api/process_frame', methods=['POST'])
-def process_frame():
+@app.route('/api/samples', methods=['POST'])
+@require_token('collect')
+def upload_sample():
+    payload = request.get_json(silent=True) or {}
     try:
-        data = request.json or {}
-        image_data = data.get('image', '')
-        if not image_data:
-            return jsonify({"status": "error", "message": "No image payload provided"}), 400
-            
-        if ',' in image_data:
-            image_data = image_data.split(',')[1]
-            
-        image_bytes = base64.b64decode(image_data)
-        np_arr = np.frombuffer(image_bytes, np.uint8)
-        frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
-        if frame is None:
-            return jsonify({"status": "error", "message": "Invalid image payload"}), 400
-            
-        camera_manager.last_client_frame_time = time.time()
-        holistic_inst = get_api_holistic()
-        annotated_frame = camera_manager.process_frame_data(
-            frame, 
-            holistic_inst, 
-            mp_drawing, 
-            mp_holistic
-        )
-        
-        _, buffer = cv2.imencode('.jpg', annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        encoded_image = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
-        
-        with camera_manager.lock:
-            return jsonify({
-                "status": "success",
-                "annotated_image": encoded_image,
-                "current_sentence": camera_manager.current_sentence,
-                "last_prediction": camera_manager.last_prediction,
-                "confidence": round(camera_manager.confidence, 2),
-                "gloss_buffer": camera_manager.gloss_buffer,
-                "is_recording": camera_manager.recording_status != "idle",
-                "recording_label": camera_manager.recording_label or "",
-                "recording_status": camera_manager.recording_status,
-                "recording_frames_collected": camera_manager.recording_frames_collected,
-                "model_loaded": camera_manager.model_loaded,
-                "labels": camera_manager.labels
-            })
-    except Exception as e:
-        import traceback
-        logger.error(f"Error processing client frame: {e}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        seq = decode_frames(payload)
+        meta = payload.get('meta') or {}
+        if not isinstance(meta, dict):
+            raise ValueError("meta must be an object")
+        meta['source'] = str(meta.get('source', 'web'))[:20]
+        path = save_sample(payload.get('label', ''), seq, meta)
+    except ValueError as e:
+        return error(str(e))
+    logger.info(f"Saved sample {path} ({len(seq)} frames, source={meta['source']})")
+    return jsonify({"status": "success", "path": path, "frames": int(len(seq))})
 
-@app.route('/api/status')
-def get_status():
-    with camera_manager.lock:
-        return jsonify({
-            "current_sentence": camera_manager.current_sentence,
-            "last_prediction": camera_manager.last_prediction,
-            "confidence": round(camera_manager.confidence, 2),
-            "gloss_buffer": camera_manager.gloss_buffer,
-            "is_recording": camera_manager.recording_status != "idle",
-            "recording_label": camera_manager.recording_label,
-            "recording_status": camera_manager.recording_status,
-            "recording_frames_collected": camera_manager.recording_frames_collected,
-            "model_loaded": camera_manager.model_loaded,
-            "labels": camera_manager.labels
-        })
-
-@app.route('/api/clear_sentence', methods=['POST'])
-def clear_sentence():
-    camera_manager.clear_sentence()
-    return jsonify({"status": "success"})
-
-@app.route('/api/start_recording', methods=['POST'])
-def start_recording():
-    data = request.json or {}
-    label = data.get('label', '').strip().upper()
-    if not label:
-        return jsonify({"status": "error", "message": "Label name is required."}), 400
-        
-    success, msg = camera_manager.start_recording(label)
-    if success:
-        return jsonify({"status": "success", "message": msg})
-    else:
-        return jsonify({"status": "error", "message": msg}), 400
 
 @app.route('/api/signs')
 def get_signs():
-    signs = []
-    dirs = get_sign_directories()
-    for d in dirs:
-        p = os.path.join(DATA_PATH, d)
-        count = len([f for f in os.listdir(p) if f.endswith('.npy')])
-        signs.append({"name": d, "samples": count})
-    return jsonify({"signs": signs})
+    return jsonify({"signs": dataset_summary()})
+
 
 @app.route('/api/npy_files')
 def get_npy_files():
     result = {}
-    dirs = get_sign_directories()
-    for d in dirs:
-        p = os.path.join(DATA_PATH, d)
-        files = sorted([f for f in os.listdir(p) if f.endswith('.npy')])
-        result[d] = [{"filename": f, "path": os.path.join(p, f)} for f in files]
+    for sign in dataset_summary():
+        folder = os.path.join(DATA_PATH, sign['name'])
+        files = sorted(f for f in os.listdir(folder) if f.endswith('.npy'))
+        result[sign['name']] = [{"filename": f, "path": os.path.join(folder, f)} for f in files]
     return jsonify(result)
+
 
 @app.route('/api/npy_data')
 def get_npy_data():
-    filepath = request.args.get('path', '')
-    abs_data_path = os.path.abspath(DATA_PATH)
-    abs_file_path = os.path.abspath(filepath) if filepath else ''
-    if not abs_file_path.startswith(abs_data_path + os.sep):
+    filepath = inside_data_path(request.args.get('path', ''))
+    if not filepath:
         return jsonify({"error": "Unauthorized path access."}), 403
-    if not os.path.exists(abs_file_path):
+    if not os.path.exists(filepath):
         return jsonify({"error": "File not found"}), 404
-    filepath = abs_file_path
-        
     try:
         data = np.load(filepath)
-        # Check if data shape is sequence (30, 1662)
-        if data.ndim == 2 and data.shape[0] == 30 and data.shape[1] == 1662:
-            frames_list = []
-            for frame_idx in range(30):
-                frame_data = data[frame_idx]
-                
-                # Split coordinates according to extract_holistic_keypoints:
-                # Pose: 33 landmarks * 4 coords = 132 elements
-                # Face: 468 landmarks * 3 coords = 1404 elements
-                # Left Hand: 21 landmarks * 3 coords = 63 elements
-                # Right Hand: 21 landmarks * 3 coords = 63 elements
-                
-                pose_part = frame_data[0:132].reshape(33, 4)
-                face_part = frame_data[132:1536].reshape(468, 3)
-                lh_part = frame_data[1536:1599].reshape(21, 3)
-                rh_part = frame_data[1599:1662].reshape(21, 3)
-                
-                # Format landmarks into JSON-friendly dicts
-                frames_list.append({
-                    "pose": [{"x": float(lm[0]), "y": float(lm[1]), "z": float(lm[2]), "visibility": float(lm[3])} for lm in pose_part],
-                    "face": [{"x": float(lm[0]), "y": float(lm[1]), "z": float(lm[2])} for lm in face_part],
-                    "left_hand": [{"x": float(lm[0]), "y": float(lm[1]), "z": float(lm[2])} for lm in lh_part],
-                    "right_hand": [{"x": float(lm[0]), "y": float(lm[1]), "z": float(lm[2])} for lm in rh_part]
-                })
-            return jsonify({
-                "filename": os.path.basename(filepath),
-                "type": "holistic",
-                "frames": frames_list
-            })
-        else:
-            return jsonify({"error": f"Invalid data format. Expected shape (30, 1662), got shape {data.shape}"}), 400
     except Exception as e:
         logger.error(f"Error loading .npy file: {e}")
         return jsonify({"error": str(e)}), 500
+    if data.ndim != 2 or data.shape[1] != HOLISTIC_SIZE:
+        return jsonify({"error": f"Expected shape (T, {HOLISTIC_SIZE}), got {data.shape}"}), 400
 
-@app.route('/api/cameras')
-def get_cameras():
-    active_idx = getattr(camera_manager, 'camera_index', 0)
-    available = []
-    
-    # We probe indices 0 to 4 safely
-    for index in range(5):
-        if index == active_idx and camera_manager.cap and camera_manager.cap.isOpened():
-            name = f"Camera {index} (Active)"
-            available.append({"id": index, "name": name, "active": True})
-            continue
-            
-        try:
-            cap = cv2.VideoCapture(index)
-            if cap.isOpened():
-                name = f"Camera {index}"
-                if index == 0:
-                    name += " (Default)"
-                available.append({"id": index, "name": name, "active": False})
-                cap.release()
-        except Exception:
-            pass
-            
-    if not available:
-        available.append({"id": 0, "name": "Webcam (Client Browser Stream)", "active": True})
-        
-    available.sort(key=lambda x: x["id"])
-    return jsonify({"cameras": available, "active_id": active_idx})
+    def pts(block, stride):
+        block = block.reshape(-1, stride)
+        if stride == 4:
+            return [{"x": float(p[0]), "y": float(p[1]), "z": float(p[2]), "visibility": float(p[3])} for p in block]
+        return [{"x": float(p[0]), "y": float(p[1]), "z": float(p[2])} for p in block]
 
-@app.route('/api/select_camera', methods=['POST'])
-def select_camera():
-    data = request.json or {}
-    camera_id = data.get('camera_id')
-    if camera_id is None:
-        return jsonify({"status": "error", "message": "Camera ID is required."}), 400
-        
-    try:
-        camera_id = int(camera_id)
-    except ValueError:
-        return jsonify({"status": "error", "message": "Invalid Camera ID."}), 400
-        
-    # Request switch
-    camera_manager.pending_camera_index = camera_id
-    camera_manager.camera_needs_switch = True
-    
-    # Wait a brief moment for the thread to process the switch
-    time.sleep(0.6)
-    
-    # Check if the active index changed successfully
-    if camera_manager.camera_index == camera_id:
-        return jsonify({"status": "success", "message": f"Successfully switched to Camera {camera_id}."})
-    else:
-        return jsonify({"status": "error", "message": f"Failed to switch to Camera {camera_id}."}), 500
+    frames = [{"pose": pts(f[0:132], 4), "face": pts(f[132:1536], 3),
+               "left_hand": pts(f[1536:1599], 3), "right_hand": pts(f[1599:1662], 3)} for f in data]
+    return jsonify({"filename": os.path.basename(filepath), "type": "holistic", "frames": frames,
+                    "meta": load_meta(filepath)})
+
 
 @app.route('/api/delete_file', methods=['POST'])
+@require_token('admin')
 def delete_file():
-    import shutil
-    data = request.json or {}
-    filepath = data.get('path', '')
-    if not filepath:
-        return jsonify({"status": "error", "message": "File path is required."}), 400
-        
-    abs_data_path = os.path.abspath(DATA_PATH)
-    abs_file_path = os.path.abspath(filepath)
-    if not abs_file_path.startswith(abs_data_path):
-        return jsonify({"status": "error", "message": "Unauthorized path access."}), 403
-        
-    if not os.path.exists(abs_file_path):
-        return jsonify({"status": "error", "message": "File not found."}), 404
-        
-    try:
-        os.remove(abs_file_path)
-        logger.info(f"Successfully deleted file: {abs_file_path}")
-        return jsonify({"status": "success", "message": "File deleted successfully."})
-    except Exception as e:
-        logger.error(f"Failed to delete file: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    path = inside_data_path((request.get_json(silent=True) or {}).get('path', ''))
+    if not path or not path.endswith('.npy'):
+        return error("Unauthorized path access.", 403)
+    if not os.path.exists(path):
+        return error("File not found.", 404)
+    delete_sample(path)
+    logger.info(f"Deleted sample: {path}")
+    return jsonify({"status": "success", "message": "File deleted successfully."})
+
 
 @app.route('/api/delete_sign', methods=['POST'])
+@require_token('admin')
 def delete_sign():
-    import shutil
-    data = request.json or {}
-    label = data.get('label', '').strip()
-    if not label:
-        return jsonify({"status": "error", "message": "Sign label is required."}), 400
-        
-    target_dir = os.path.abspath(os.path.join(DATA_PATH, label))
-    abs_data_path = os.path.abspath(DATA_PATH)
-    if not target_dir.startswith(abs_data_path) or target_dir == abs_data_path:
-        return jsonify({"status": "error", "message": "Unauthorized path access."}), 403
-        
-    if not os.path.exists(target_dir):
-        return jsonify({"status": "error", "message": "Sign dataset directory not found."}), 404
-        
+    label = (request.get_json(silent=True) or {}).get('label', '').strip()
+    target = inside_data_path(os.path.join(DATA_PATH, label)) if label else None
+    if not target:
+        return error("Unauthorized path access.", 403)
+    if not os.path.isdir(target):
+        return error("Sign dataset directory not found.", 404)
+    shutil.rmtree(target)
+    logger.info(f"Deleted sign dataset folder: {target}")
+    return jsonify({"status": "success", "message": "Sign dataset deleted successfully."})
+
+
+# --- LIVE TRANSLATION (client-side landmarks) ---
+
+@app.route('/api/stream/frames', methods=['POST'])
+def stream_frames():
+    session_id = request.headers.get('X-Session-Id', '')[:64]
+    if len(session_id) < 8:
+        return error("X-Session-Id header required")
     try:
-        shutil.rmtree(target_dir)
-        logger.info(f"Successfully deleted sign dataset folder: {target_dir}")
-        return jsonify({"status": "success", "message": "Sign dataset deleted successfully."})
-    except Exception as e:
-        logger.error(f"Failed to delete sign dataset folder: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        frames = parse_frames(request.get_data())
+        session = sessions.get(session_id, request.headers.get('X-Profile') or None)
+    except ValueError as e:
+        return error(str(e))
+    return jsonify({"status": "success", **session.push(frames)})
+
+
+@app.route('/api/session/clear', methods=['POST'])
+def clear_session():
+    session_id = request.headers.get('X-Session-Id', '')[:64]
+    try:
+        sessions.get(session_id, request.headers.get('X-Profile') or None).clear()
+    except ValueError as e:
+        return error(str(e))
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/predict', methods=['POST'])
+def predict():
+    payload = request.get_json(silent=True) or {}
+    try:
+        clf = sessions.classifier(payload.get('profile'))
+        if not clf.loaded:
+            return error(f"No trained model for profile '{clf.profile_name}'", 404)
+        seq = decode_frames(payload)
+        if seq.ndim != 2 or seq.shape[1] != HOLISTIC_SIZE or len(seq) < 2:
+            raise ValueError(f"frames must be (T, {HOLISTIC_SIZE})")
+        probs = clf.predict(resample_sequence(seq, clf.sequence_length))
+    except ValueError as e:
+        return error(str(e))
+    idx = int(np.argmax(probs))
+    return jsonify({"status": "success", "profile": clf.profile_name, "label": clf.labels[idx],
+                    "confidence": float(probs[idx]),
+                    "probabilities": {l: round(float(p), 4) for l, p in zip(clf.labels, probs)}})
+
+
+# --- MODEL DISTRIBUTION (phone app) ---
+
+@app.route('/api/models')
+def list_models():
+    out = {}
+    for name, meta in trained_profiles().items():
+        files = {f: f"/api/models/{name}/{f}" for f in MODEL_FILES
+                 if os.path.exists(os.path.join(MODELS_PATH, name, f))}
+        out[name] = {"version": meta.get('version'), "labels": meta.get('labels'),
+                     "sequence_length": meta.get('sequence_length'), "camera": meta.get('camera'),
+                     "target": meta.get('target'), "metrics": meta.get('metrics'), "files": files}
+    return jsonify({"default_profile": load_profiles()['default_profile'], "profiles": out})
+
+
+@app.route('/api/models/<profile>/<filename>')
+def model_file(profile, filename):
+    if profile not in load_profiles()['profiles'] or filename not in MODEL_FILES:
+        abort(404)
+    directory = os.path.abspath(os.path.join(MODELS_PATH, profile))
+    if not os.path.exists(os.path.join(directory, filename)):
+        abort(404)
+    return send_from_directory(directory, filename, max_age=0)
+
+
+# --- TRAINING ---
 
 @app.route('/api/train', methods=['POST'])
+@require_token('admin')
 def run_train():
-    global training_process, training_logs
-    if training_process and training_process.poll() is None:
-        return jsonify({"status": "error", "message": "Training is already in progress."}), 409
-        
-    training_logs = []
-    
-    # We pause camera inference while training to free system resources
-    camera_manager.stop()
-    
-    try:
-        # Run train_model.py in background, capture stdout
-        cmd = [sys.executable, "train_model.py"]
-        # Set environment variable to force stdout flush
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        
-        training_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=env
-        )
-        logger.info("Training process initiated.")
-        return jsonify({"status": "success", "message": "Training started."})
-    except Exception as e:
-        logger.error(f"Failed to start training: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+    global training_process, training_profile
+    payload = request.get_json(silent=True) or {}
+    profile = payload.get('profile') or load_profiles()['default_profile']
+    if profile != 'all':
+        try:
+            profile = get_profile(profile)['name']
+        except ValueError as e:
+            return error(str(e))
+    cmd = [sys.executable, "train_model.py", "--profile", profile]
+    for key, flag in (('epochs', '--epochs'), ('batch_size', '--batch-size')):
+        if payload.get(key):
+            try:
+                cmd += [flag, str(int(payload[key]))]
+            except (TypeError, ValueError):
+                return error(f"{key} must be an integer")
+
+    with training_lock:
+        if training_process and training_process.poll() is None:
+            return error("Training is already in progress.", 409)
+        env = dict(os.environ, PYTHONUNBUFFERED="1")
+        try:
+            training_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                                text=True, bufsize=1, env=env)
+        except Exception as e:
+            logger.error(f"Failed to start training: {e}")
+            return error(str(e), 500)
+        training_profile = profile
+    logger.info(f"Training started: {' '.join(cmd)}")
+    return jsonify({"status": "success", "message": f"Training started for profile '{profile}'."})
+
 
 @app.route('/stream_train_logs')
 def stream_train_logs():
     def generate_logs():
-        global training_process, training_logs
-        if not training_process:
+        proc = training_process
+        if not proc:
             yield "data: {\"type\": \"log\", \"message\": \"No training process active.\"}\n\n"
             return
-            
-        logger.info("SSE client connected to training log stream.")
-        
         while True:
-            line = training_process.stdout.readline()
+            line = proc.stdout.readline()
             if not line:
-                if training_process.poll() is not None:
-                    # Process completed
-                    rc = training_process.returncode
-                    msg = "Training complete!" if rc == 0 else f"Training failed with exit code {rc}"
-                    logger.info(msg)
-                    
-                    # Reload the newly trained model in the CameraManager
-                    if rc == 0:
-                        camera_manager.reload_model()
-                        
-                    yield f"data: {json.dumps({'type': 'status', 'status': 'completed', 'code': rc, 'message': msg})}\n\n"
-                    break
-                time.sleep(0.1)
-                continue
-                
-            stripped_line = line.strip()
-            # Check if line contains Keras progress or special metrics
-            # E.g. Epoch 1/150 or our custom printed callback EPOCH_END
-            if "EPOCH_END:" in stripped_line:
-                # Format: EPOCH_END:epoch:accuracy:loss:val_accuracy:val_loss
-                parts = stripped_line.split(":")
-                if len(parts) >= 6:
-                    epoch = int(parts[1])
-                    acc = float(parts[2])
-                    loss = float(parts[3])
-                    val_acc = float(parts[4])
-                    val_loss = float(parts[5])
-                    
-                    data = {
-                        "type": "epoch_metrics",
-                        "epoch": epoch,
-                        "accuracy": acc,
-                        "loss": loss,
-                        "val_accuracy": val_acc,
-                        "val_loss": val_loss
-                    }
+                if proc.poll() is None:
+                    time.sleep(0.1)
+                    continue
+                rc = proc.returncode
+                msg = "Training complete!" if rc == 0 else f"Training failed with exit code {rc}"
+                if rc == 0:
+                    names = list(load_profiles()['profiles']) if training_profile == 'all' else [training_profile]
+                    for name in names:
+                        sessions.reload(name)
+                    if local_camera:
+                        local_camera.reload_model()
+                yield f"data: {json.dumps({'type': 'status', 'status': 'completed', 'code': rc, 'message': msg})}\n\n"
+                break
+            line = line.strip()
+            if "EPOCH_END:" in line:
+                parts = line.split("EPOCH_END:")[1].split(":")
+                if len(parts) >= 5:
+                    data = {"type": "epoch_metrics", "epoch": int(parts[0]), "accuracy": float(parts[1]),
+                            "loss": float(parts[2]), "val_accuracy": float(parts[3]), "val_loss": float(parts[4])}
                     yield f"data: {json.dumps(data)}\n\n"
-            else:
-                data = {
-                    "type": "log",
-                    "message": stripped_line
-                }
-                yield f"data: {json.dumps(data)}\n\n"
-                
+            elif line:
+                yield f"data: {json.dumps({'type': 'log', 'message': line})}\n\n"
     return Response(generate_logs(), mimetype='text/event-stream')
+
+
+# --- LOCAL CAMERA MODE (LOCAL_CAMERA=1) ---
+
+def local_only(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if local_camera is None:
+            return error("Local camera mode is disabled (set LOCAL_CAMERA=1).", 404)
+        return fn(*args, **kwargs)
+    return wrapper
+
+
+@app.route('/video_feed')
+@local_only
+def video_feed():
+    local_camera.start()
+
+    def gen():
+        while True:
+            yield b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + local_camera.jpeg() + b'\r\n\r\n'
+            time.sleep(0.03)
+    return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/api/status')
+@local_only
+def get_status():
+    return jsonify(local_camera.status())
+
+
+@app.route('/api/clear_sentence', methods=['POST'])
+@local_only
+def clear_sentence():
+    local_camera.clear_sentence()
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/start_recording', methods=['POST'])
+@local_only
+def start_recording():
+    try:
+        label = normalize_label((request.get_json(silent=True) or {}).get('label', ''))
+    except ValueError as e:
+        return error(str(e))
+    ok, msg = local_camera.start_recording(label)
+    return (jsonify({"status": "success", "message": msg}) if ok else error(msg))
+
+
+@app.route('/api/cameras')
+@local_only
+def get_cameras():
+    cams = local_camera.list_cameras() or [{"id": 0, "name": "Camera 0", "active": True}]
+    return jsonify({"cameras": cams, "active_id": local_camera.camera_index})
+
+
+@app.route('/api/select_camera', methods=['POST'])
+@local_only
+def select_camera():
+    try:
+        camera_id = int((request.get_json(silent=True) or {}).get('camera_id'))
+    except (TypeError, ValueError):
+        return error("Invalid Camera ID.")
+    local_camera.pending_camera_index = camera_id
+    time.sleep(0.6)
+    if local_camera.camera_index == camera_id:
+        return jsonify({"status": "success", "message": f"Switched to Camera {camera_id}."})
+    return error(f"Failed to switch to Camera {camera_id}.", 500)
+
 
 if __name__ == '__main__':
     import socket
-    
+
     def find_free_port(start_port):
-        port = start_port
-        for _ in range(10):  # Try up to 10 consecutive ports
+        for port in range(start_port, start_port + 10):
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 if s.connect_ex(('127.0.0.1', port)) != 0:
                     return port
-            port += 1
         return start_port
 
     target_port = int(os.environ.get('PORT', PORT))
     actual_port = find_free_port(target_port)
-    
     if actual_port != target_port:
         logger.warning(f"Port {target_port} was in use. Falling back to port {actual_port}.")
-    else:
-        logger.info(f"Starting server on port {actual_port}...")
-
-    # Start the CameraManager
-    camera_manager.start()
+    logger.info(f"Starting server on port {actual_port} (local camera: {local_camera is not None})...")
     try:
-        # Run Flask server
         app.run(host='0.0.0.0', port=actual_port, debug=False, threaded=True)
     finally:
-        camera_manager.stop()
+        if local_camera:
+            local_camera.stop()

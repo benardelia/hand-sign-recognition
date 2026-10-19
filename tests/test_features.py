@@ -51,6 +51,14 @@ class FeatureSpecTest(unittest.TestCase):
         shifted[:, x_cols] += 0.05
         np.testing.assert_allclose(select_features(seq, spec), select_features(shifted, spec), atol=1e-4)
 
+    def test_pose_z_masked(self):
+        spec = build_feature_spec(get_profile('low'))
+        out = select_features(random_sequence(), spec).reshape(30, -1, 3)
+        pose_idx = [i for i, p in enumerate(spec['points']) if p['group'] == 'pose']
+        hand_idx = [i for i, p in enumerate(spec['points']) if p['group'] != 'pose']
+        self.assertTrue(np.all(out[:, pose_idx, 2] == 0))
+        self.assertTrue(np.any(out[:, hand_idx, 2] != 0))
+
 
 class SequenceOpsTest(unittest.TestCase):
     def test_resample_lengths(self):
