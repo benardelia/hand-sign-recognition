@@ -1,0 +1,79 @@
+PODS:
+  - camera_avfoundation (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - integration_test (0.0.1):
+    - Flutter
+  - MediaPipeTasksCommon (1.0.0)
+  - MediaPipeTasksVision (1.0.0):
+    - MediaPipeTasksCommon (= 1.0.0)
+  - package_info_plus (0.4.5):
+    - Flutter
+  - Protobuf (3.29.6)
+  - reactive_ble_mobile (0.0.1):
+    - Flutter
+    - FlutterMacOS
+    - Protobuf (~> 3.5)
+    - SwiftProtobuf (~> 1.0)
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - sign_landmarks (0.1.0):
+    - Flutter
+    - MediaPipeTasksVision (= 1.0.0)
+  - SwiftProtobuf (1.39.0)
+  - wakelock_plus (0.0.1):
+    - Flutter
+
+DEPENDENCIES:
+  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/darwin`)
+  - Flutter (from `Flutter`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
+  - reactive_ble_mobile (from `.symlinks/plugins/reactive_ble_mobile/darwin`)
+  - shared_preferences_foundation (from `.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - sign_landmarks (from `.symlinks/plugins/sign_landmarks/ios`)
+  - wakelock_plus (from `.symlinks/plugins/wakelock_plus/ios`)
+
+SPEC REPOS:
+  trunk:
+    - MediaPipeTasksCommon
+    - MediaPipeTasksVision
+    - Protobuf
+    - SwiftProtobuf
+
+EXTERNAL SOURCES:
+  camera_avfoundation:
+    :path: ".symlinks/plugins/camera_avfoundation/darwin"
+  Flutter:
+    :path: Flutter
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+  package_info_plus:
+    :path: ".symlinks/plugins/package_info_plus/ios"
+  reactive_ble_mobile:
+    :path: ".symlinks/plugins/reactive_ble_mobile/darwin"
+  shared_preferences_foundation:
+    :path: ".symlinks/plugins/shared_preferences_foundation/darwin"
+  sign_landmarks:
+    :path: ".symlinks/plugins/sign_landmarks/ios"
+  wakelock_plus:
+    :path: ".symlinks/plugins/wakelock_plus/ios"
+
+SPEC CHECKSUMS:
+  camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
+  integration_test: 4a889634ef21a45d28d50d622cf412dc6d9f586e
+  MediaPipeTasksCommon: 520bf860a59a3425471fdd516d82263d2ced5700
+  MediaPipeTasksVision: 2a0e74fd13f7a5df9eae3716b21e459806c65ce9
+  package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
+  Protobuf: 8d5596f7468be5400861a6bbfb2dfe9d0d1cde34
+  reactive_ble_mobile: c6a561a56b81d802642823cd3455a6dee24629d7
+  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
+  sign_landmarks: 61501c0e041c4080476be5415bc3c6f445c167af
+  SwiftProtobuf: eb2c3c26d43afb22247593e60e3163cdab2a0b4a
+  wakelock_plus: d4ca1e4e4bc9de42cb55d57b5bdc158af318e3c6
+
+PODFILE CHECKSUM: 3609e7f8f5dd9aee453093cf9672b67f473a1fbe
+
+COCOAPODS: 1.16.2
