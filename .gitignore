@@ -4,3 +4,8 @@
 !/Data/.gitkeep
 /Model/*
 !/Model/.gitkeep
+# Local env, caches
+.env
+__pycache__/
+*.pyc
+.DS_Store

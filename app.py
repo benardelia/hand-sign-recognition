@@ -535,8 +535,13 @@ def get_npy_files():
 @app.route('/api/npy_data')
 def get_npy_data():
     filepath = request.args.get('path', '')
-    if not filepath or not os.path.exists(filepath):
+    abs_data_path = os.path.abspath(DATA_PATH)
+    abs_file_path = os.path.abspath(filepath) if filepath else ''
+    if not abs_file_path.startswith(abs_data_path + os.sep):
+        return jsonify({"error": "Unauthorized path access."}), 403
+    if not os.path.exists(abs_file_path):
         return jsonify({"error": "File not found"}), 404
+    filepath = abs_file_path
         
     try:
         data = np.load(filepath)
