@@ -58,7 +58,7 @@
       "normalize": true,
       "use_pose_z": false,
       "augment": {"mirror": false, "time_warp": 0.2, "noise": 0.005, "drop_face": 0.25, "copies": 2},
-      "model": {"arch": "lstm", "epochs": 150, "batch_size": 32},
+      "model": {"arch": "cnn_transformer", "epochs": 150, "batch_size": 32},
       "export": {"tflite": false, "quantization": "none"}
     }
   }

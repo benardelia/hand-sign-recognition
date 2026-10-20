@@ -86,6 +86,21 @@ def build_model(profile, spec, num_classes):
         x = layers.Concatenate()([layers.GlobalAveragePooling1D()(x), layers.GlobalMaxPooling1D()(x)])
         x = layers.Dense(128, activation='relu')(x)
         x = layers.Dropout(0.3)(x)
+    elif arch == 'cnn_transformer':
+        # Experimental (PC) track: local motion via convolutions, global context via
+        # self-attention, the family used by the Kaggle ISLR winners.
+        dim = 192
+        x = layers.Dense(dim)(x)
+        for _ in range(2):
+            c = layers.Conv1D(dim, 5, padding='same', activation='swish')(x)
+            x = layers.LayerNormalization()(layers.Add()([x, c]))
+            a = layers.MultiHeadAttention(num_heads=4, key_dim=dim // 4, dropout=0.1)(x, x)
+            x = layers.LayerNormalization()(layers.Add()([x, a]))
+            f = layers.Dense(dim * 2, activation='swish')(x)
+            f = layers.Dense(dim)(f)
+            x = layers.LayerNormalization()(layers.Add()([x, layers.Dropout(0.1)(f)]))
+        x = layers.GlobalAveragePooling1D()(x)
+        x = layers.Dropout(0.3)(x)
     elif arch == 'lstm':
         x = layers.LSTM(128, return_sequences=True)(x)
         x = layers.Dropout(0.2)(x)
