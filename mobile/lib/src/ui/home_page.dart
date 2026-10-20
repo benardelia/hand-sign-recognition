@@ -44,7 +44,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     unawaited(WakelockPlus.disable());
-    _pipeline?.dispose();
+    final pipeline = _pipeline;
+    if (pipeline != null) unawaited(pipeline.shutdown().then((_) => pipeline.dispose()));
     unawaited(_glasses.disconnect());
     super.dispose();
   }
@@ -65,7 +66,10 @@ class _HomePageState extends State<HomePage> {
       _error = null;
       _loading = 'Starting...';
     });
-    old?.dispose();
+    if (old != null) {
+      await old.shutdown();
+      old.dispose();
+    }
     try {
       final holistic = await _store.ensureHolisticModel(onProgress: _onProgress);
       _onProgress('Loading tracking model', null);
@@ -83,6 +87,7 @@ class _HomePageState extends State<HomePage> {
       await pipeline.start(source);
       await WakelockPlus.enable();
       if (!mounted) {
+        await pipeline.shutdown();
         pipeline.dispose();
         return;
       }

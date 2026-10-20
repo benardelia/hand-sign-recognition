@@ -197,9 +197,24 @@ class TranslationPipeline extends ChangeNotifier {
     });
   }
 
+  bool _disposed = false;
+
+  // A frame that was in flight when the pipeline stopped may finish after dispose().
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
   @override
   void dispose() {
-    unawaited(stop().then((_) => classifier.close()));
+    _disposed = true;
     super.dispose();
+  }
+
+  /// Stops the camera and releases the native classifier. Await it before loading another
+  /// model: the plugin holds a single classifier.
+  Future<void> shutdown() async {
+    await stop();
+    await classifier.close();
   }
 }
