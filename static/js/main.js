@@ -320,7 +320,7 @@ function renderOverviewTable() {
     tbody.innerHTML = signsData.map(sign => `
         <tr>
             <td><strong class="highlighted-text">${sign.name}</strong></td>
-            <td>${sign.samples} sequence files</td>
+            <td>${sign.samples} sequence files<br><span class="text-muted small">${formatSources(sign.sources)}</span></td>
             <td>
                 <div class="table-actions">
                     <button class="btn btn-secondary btn-icon" onclick="switchTab('player')" title="Inspect Landmarks">
@@ -349,8 +349,15 @@ function renderSignsGrid() {
             </button>
             <div class="sign-name">${sign.name}</div>
             <div class="sign-count"><i class="fa-solid fa-folder-open"></i> ${sign.samples} samples</div>
+            <div class="sign-sources text-muted small">${formatSources(sign.sources)}</div>
         </div>
     `).join('');
+}
+
+// "web 12 · phone 3" - where the samples of a sign were recorded (dataset balance check).
+function formatSources(sources) {
+    if (!sources) return '';
+    return Object.entries(sources).map(([src, n]) => `${src} ${n}`).join(' · ');
 }
 
 function initDatasetForm() {

@@ -14,8 +14,8 @@ This document outlines the architectural path to evolve this project from a stat
 ## Phase 4: Holistic Body/Face Tracking (COMPLETED)
 *Status:* Implemented MediaPipe Holistic integration to capture emotional context (Face Mesh), body posture (Pose), and both hands simultaneously. Created `collect_holistic.py` and `realtime_holistic.py`.
 
-## Phase 5: Smart Glasses + Mobile (PLANNED)
-*Status:* Glasses capture video, a Flutter app (Android/iOS) runs inference, and the Flask app becomes the data collection and training hub. Tracked in [docs/SMART_GLASSES_TRACKER.md](docs/SMART_GLASSES_TRACKER.md).
+## Phase 5: Smart Glasses + Mobile (ACTIVE)
+*Status:* Profiles, browser collection, Flutter app and glasses firmware are implemented; hardware prototype and field tests remain. Tracked in [docs/SMART_GLASSES_TRACKER.md](docs/SMART_GLASSES_TRACKER.md).
 
 
 ---
