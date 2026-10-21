@@ -55,6 +55,24 @@ Collect data for each sign you want the AI to learn:
 - **Hand-Only (Legacy)**: Run `python collect_sign_dataset.py` (static) or `python collect_landmarks.py` (motion).
 - **Holistic Tracking (Advanced)**: Run `python collect_holistic.py`. Press **'s'** to record a 30-frame sequence including your face, pose, and hands.
 
+#### Importing downloaded data
+`tools/import_media.py` turns downloaded material into training samples (source `import`):
+```bash
+# One folder per sign; the folder name is the label
+python tools/import_media.py media downloads/ --dataset-name my-dictionary --license "CC BY 4.0"
+# Kaggle "Isolated Sign Language Recognition" landmark files (American Sign Language)
+python tools/import_media.py kaggle path/to/asl-signs --labels hello thankyou --limit-per-label 50
+```
+- **Videos** are trimmed to the part where hands are visible (max 2 s, `--max-seconds`).
+- **Photos** only help signs that don't move (handshapes, fingerspelling): one frame is
+  repeated to a recording's length.
+- Clips without hands are skipped, and re-running skips files already imported. `--dry-run`
+  shows what would be added.
+- Frames are mirrored like the collectors (use `--no-flip` for clips that are already
+  mirrored).
+- Check the licence of anything you download. Use data from the sign language your users
+  sign.
+
 ### 2. Verification
 Check your data quality before training:
 - **Numerical View**: `python preview_npy.py <path_to_file.npy>`

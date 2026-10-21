@@ -77,6 +77,7 @@ Final feature counts are recorded in `config/profiles.yaml` once Phase 0 is impl
 - [x] `GET /api/models` and `/api/models/<profile>/<file>` (with version + sha256)
 - [x] Train from the web UI with a profile selector
 - [x] Dataset view shows samples per label and per source (web / phone / glasses / pc)
+- [x] `tools/import_media.py`: import downloaded videos / photos (folder = label) and Kaggle ISLR landmark files, source `import`, duplicate-safe
 
 ## Phase 3 — Flutter app (Android + iOS) ✅ (needs real-device field test)
 
@@ -128,6 +129,7 @@ Final feature counts are recorded in `config/profiles.yaml` once Phase 0 is impl
 | 2026-10-20 | protobuf-java instead of protobuf-javalite on Android | MediaPipe Holistic calls the full-protobuf `Any.Builder.build()` (crash otherwise) |
 | 2026-10-20 | flutter_reactive_ble (BSD-3) for BLE | flutter_blue_plus 2.x needs a paid license for commercial use |
 | 2026-10-20 | XIAO ESP32S3 Sense + SSD1306 OLED for the prototype | Camera + PSRAM in 21 x 17.5 mm; cheap, Arduino-friendly |
+| 2026-10-22 | Imports never guess whether a file was mirrored | MediaPipe names body sides by appearance, so mirroring is invisible in landmarks; a wrong guess only swaps the dominant hand, which mirror augmentation covers |
 
 ## Risks / open questions
 
