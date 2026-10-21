@@ -1,17 +1,22 @@
 """
 Real-time holistic sign translation from a local webcam (desktop / experimental track).
 
-    python realtime_holistic.py --profile experimental
-    python realtime_holistic.py --profile low --camera 1
+    python scripts/realtime_holistic.py --profile experimental
+    python scripts/realtime_holistic.py --profile low --camera 1
 
 Camera resolution and sequence length come from the profile (config/profiles.json),
-the model from Model/<profile>/ (see train_model.py).
+the model from Model/<profile>/ (see ml/train_model.py).
 """
 import argparse
+import os
+import sys
 
 import cv2
 import mediapipe as mp
 import numpy as np
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.features import get_profile
 from utils.holistic_utils import extract_holistic_keypoints
@@ -48,7 +53,7 @@ def main():
     profile = get_profile(args.profile)
     classifier = SignClassifier(profile['name'], prefer_tflite=not args.keras)
     if not classifier.loaded:
-        logger.error(f"No model for profile '{profile['name']}'. Run: python train_model.py --profile {profile['name']}")
+        logger.error(f"No model for profile '{profile['name']}'. Run: python ml/train_model.py --profile {profile['name']}")
         return
     decoder = GlossDecoder(classifier.labels, threshold=args.threshold)
     seq_len = classifier.sequence_length

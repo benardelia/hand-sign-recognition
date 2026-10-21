@@ -3,6 +3,12 @@ from cvzone.HandTrackingModule import HandDetector
 from cvzone.ClassificationModule import Classifier
 import numpy as np
 import math
+import os
+import sys
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.logger_config import setup_logger
 
 # Initialize Logger

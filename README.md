@@ -52,8 +52,8 @@ This project is a high-performance **Landmark-based** recognition system. It has
 
 ### 1. Data Collection
 Collect data for each sign you want the AI to learn:
-- **Hand-Only (Legacy)**: Run `python collect_sign_dataset.py` (static) or `python collect_landmarks.py` (motion).
-- **Holistic Tracking (Advanced)**: Run `python collect_holistic.py`. Press **'s'** to record a 30-frame sequence including your face, pose, and hands.
+- **Hand-Only (Legacy)**: see [legacy/README.md](legacy/README.md).
+- **Holistic Tracking (Advanced)**: Run `python scripts/collect_holistic.py` (or use the web dashboard). Press **'s'** to record a 30-frame sequence including your face, pose, and hands.
 
 #### Importing downloaded data
 `tools/import_media.py` turns downloaded material into training samples (source `import`):
@@ -75,13 +75,13 @@ python tools/import_media.py kaggle path/to/asl-signs --labels hello thankyou --
 
 ### 2. Verification
 Check your data quality before training:
-- **Numerical View**: `python preview_npy.py <path_to_file.npy>`
-- **Skeletal Animation**: `python visualize_landmarks.py <path_to_file.npy>`
+- **Numerical View**: `python tools/preview_npy.py <path_to_file.npy>`
+- **Skeletal Animation**: `python tools/visualize_landmarks.py <path_to_file.npy>`
 
 ### 3. Training
 Every quality profile trains on the same holistic data (`Data/Holistic_Landmarks`):
 ```bash
-python train_model.py --profile low            # or high, experimental, all
+python ml/train_model.py --profile low         # or high, experimental, all
 ```
 Output goes to `Model/<profile>/`: `model.keras`, `model.tflite` (low/high), `labels.txt`,
 `profile.json` and `feature_spec.json`. Feature selection and normalization are part of the
@@ -95,8 +95,7 @@ model, so every client feeds the raw `(T, 1662)` landmark sequence.
 
 ### 4. Real-time Translation (CLI)
 Run the desktop-based translation system to see the AI in action:
-- **Hand-Only**: `python realtime_inference.py`
-- **Holistic**: `python realtime_holistic.py --profile experimental` (any profile works)
+- **Holistic**: `python scripts/realtime_holistic.py --profile experimental` (any profile works)
 
 **Controls:**
 - **'C'**: Clear the current sentence.
@@ -177,29 +176,36 @@ See [ROADMAP.md](ROADMAP.md) for details:
 - **Phase 5**: Smart Glasses + Mobile ([tracker](docs/SMART_GLASSES_TRACKER.md))
 
 ## Project Structure
-- `app.py`: Web hub: dashboard, collection/prediction/model APIs, training.
-- `local_camera.py`: Server-webcam mode (`LOCAL_CAMERA=1`).
-- `config/profiles.json`: Quality profiles and dataset conventions.
-- `static/js/pipeline.js`: Browser-side MediaPipe landmark extraction.
-- `tools/parity_check.py`: Landmark parity check between MediaPipe graphs.
-- `mobile/`: Flutter app + `sign_landmarks` native plugin.
-- `firmware/glasses_esp32s3/`: Glasses firmware.
-- `collect_holistic.py`: Captures full-body holistic sequences (Phase 4).
-- `realtime_holistic.py`: Live holistic translation script (Phase 4).
-- `collect_sign_dataset.py`: Captures static hand landmarks (Legacy).
-- `collect_landmarks.py`: Captures hand motion sequences (Legacy).
-- `train_model.py`: Trains and exports a quality profile (`--profile`).
-- `realtime_inference.py`: Live hand-only translation (Legacy).
-- `utils/`:
-    - `holistic_utils.py`: Logic for extracting 1662 holistic data points.
-    - `normalization.py`: Hand-only translation and scaling logic.
-    - `translator.py`: Gloss-to-Text sentence reconstruction.
-    - `features.py` / `tf_layers.py`: Profile feature selection and normalization (numpy + in-model layer).
-    - `inference.py`: Profile-aware model loading and the gloss decoder.
-    - `dataset.py` / `sessions.py`: Sample storage and per-client live sessions.
-    - `logger_config.py`: Advanced logging configuration.
-- `Data/`: Folder containing `.npy` datasets.
-- `Model/`: Folder containing trained models and labels.
+Run every command from the repository root (`Data/`, `Model/` and `config/` are relative to it).
+
+```
+app.py                  web hub: dashboard, collection / prediction / model APIs, training
+server/local_camera.py  server-webcam mode (LOCAL_CAMERA=1)
+templates/ static/      dashboard UI; static/js/pipeline.js extracts landmarks in the browser
+config/profiles.json    quality profiles and dataset conventions
+ml/train_model.py       trains and exports a profile (--profile low|high|experimental|all)
+scripts/                desktop tools that use the webcam
+  collect_holistic.py     record holistic sequences
+  realtime_holistic.py    live translation (--profile)
+tools/                  data utilities
+  import_media.py         import downloaded videos / photos / Kaggle landmarks
+  parity_check.py         compare landmarks between MediaPipe versions
+  preview_npy.py          print a recorded sequence
+  visualize_landmarks.py  replay a recorded sequence as a skeleton
+utils/                  shared code
+  holistic_utils.py       1662-value holistic frame extraction
+  features.py, tf_layers.py  profile feature selection + normalization (numpy / in-model)
+  inference.py            profile-aware model loading, gloss decoder
+  dataset.py, sessions.py sample storage, per-client live sessions
+  translator.py           gloss-to-text sentences
+  logger_config.py        logging
+tests/                  python -m unittest discover tests
+mobile/                 Flutter app + sign_landmarks native plugin
+firmware/               glasses firmware (ESP32-S3)
+legacy/                 v1 hand-only pipeline (63 features, cvzone), kept for reference
+docs/                   smart-glasses tracker
+Data/  Model/           datasets and trained models (not in git)
+```
 
 ## Acknowledgments
 - [cvzone](https://github.com/cvzone/cvzone) for simplified tracking utilities.

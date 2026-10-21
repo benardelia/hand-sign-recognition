@@ -4,8 +4,13 @@ import numpy as np
 import os
 import time
 from tensorflow.keras.models import load_model
+import sys
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.logger_config import setup_logger
-from utils.normalization import normalize_landmarks
+from legacy.normalization import normalize_landmarks
 from utils.translator import translator
 
 # Initialize Logger
@@ -19,7 +24,7 @@ STABILITY_FRAMES = 5 # Number of consecutive frames a word must be detected
 
 # Load Model
 if not os.path.exists(MODEL_PATH):
-    logger.error(f"Model not found at {MODEL_PATH}. Please run train_model.py first.")
+    logger.error(f"Model not found at {MODEL_PATH}. Please run the legacy trainer first (see legacy/README.md).")
     exit()
 
 model = load_model(MODEL_PATH)

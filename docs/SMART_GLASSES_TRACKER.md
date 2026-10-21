@@ -22,7 +22,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
  Flask hub (server)
    ├─ browser collector: MediaPipe JS in the browser → POST /api/samples
    ├─ dataset: Data/Holistic_Landmarks/<LABEL>/*.npy + *.json metadata
-   ├─ train: train_model.py --profile low|high|experimental
+   ├─ train: ml/train_model.py --profile low|high|experimental
    └─ Model/<profile>/{model.tflite, labels.txt, profile.json, feature_spec.json}
 ```
 
@@ -42,7 +42,7 @@ Core rules:
 | Features / frame | ~150 (both hands + 8 upper-body pose points) | ~400 (hands + upper-body pose + ~40 lip/brow points) | 1662 (full holistic) |
 | Sequence length | 15 | 30 | 30–60 |
 | Model | Small GRU, int8 TFLite (~50–100 KB) | GRU/1D-CNN, fp16 TFLite (~0.5 MB) | LSTM/Transformer, Keras, PC only |
-| Runs where | Phone | Phone | `realtime_holistic.py` / Flask local mode |
+| Runs where | Phone | Phone | `scripts/realtime_holistic.py` / Flask local mode |
 
 Final feature counts are recorded in `config/profiles.yaml` once Phase 0 is implemented.
 
@@ -55,7 +55,7 @@ Final feature counts are recorded in `config/profiles.yaml` once Phase 0 is impl
 - [x] Selection + normalization run **inside the model** (`utils/tf_layers.py`), so clients only feed raw `(T, 1662)` frames; `feature_spec.json` exported for reference
 - [x] Resample sequences to the profile's sequence length (linear, never blending a detected and a missing landmark)
 - [~] Timestamp-aware resampling: timestamps are now stored with every sample; training still resamples by frame index
-- [x] `train_model.py --profile <name|all>` → `Model/<profile>/`
+- [x] `ml/train_model.py --profile <name|all>` → `Model/<profile>/`
 - [x] TFLite export (builtin ops only): dynamic int8 for `low` (~65 KB), float16 for `high` (~0.7 MB); Keras for `experimental`
 - [x] TFLite vs Keras check during training (max diff ~1e-5)
 - [x] Legacy `Model/hand_model.h5` still loads when a profile has no model yet
@@ -100,7 +100,7 @@ Final feature counts are recorded in `config/profiles.yaml` once Phase 0 is impl
 
 ## Phase 5 — Experimental track (PC)
 
-- [x] `realtime_holistic.py --profile experimental`
+- [x] `scripts/realtime_holistic.py --profile experimental`
 - [x] CNN + Transformer architecture for `experimental`
 - [ ] Continuous signing (sentences instead of isolated signs) — needs a much larger dataset
 

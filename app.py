@@ -9,7 +9,7 @@ Flutter app), so the server only receives numbers:
   GET  /api/models           trained profiles; files under /api/models/<profile>/<file>
   POST /api/train            train a profile (streams logs on /stream_train_logs)
 
-LOCAL_CAMERA=1 additionally enables the host's own webcam (local_camera.py).
+LOCAL_CAMERA=1 additionally enables the host's own webcam (server/local_camera.py).
 """
 import base64
 import functools
@@ -42,6 +42,7 @@ LOCAL_CAMERA = os.environ.get('LOCAL_CAMERA', '0') == '1'
 ADMIN_TOKEN = os.environ.get('ADMIN_TOKEN', '')      # required for delete/train when set
 COLLECT_TOKEN = os.environ.get('COLLECT_TOKEN', '')  # required for sample upload when set
 MODEL_FILES = {'model.tflite', 'labels.txt', 'profile.json', 'feature_spec.json'}
+TRAIN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ml', 'train_model.py')
 
 MEDIAPIPE_VERSION = '0.10.14'
 MEDIAPIPE = {
@@ -57,7 +58,7 @@ sessions = SessionStore()
 local_camera = None
 if LOCAL_CAMERA:
     try:
-        from local_camera import LocalCamera
+        from server.local_camera import LocalCamera
         local_camera = LocalCamera(record_seconds=load_profiles()['dataset']['record_seconds'])
     except Exception as e:
         logger.error(f"LOCAL_CAMERA=1 but local camera mode failed to initialize: {e}")
@@ -292,7 +293,7 @@ def run_train():
             profile = get_profile(profile)['name']
         except ValueError as e:
             return error(str(e))
-    cmd = [sys.executable, "train_model.py", "--profile", profile]
+    cmd = [sys.executable, TRAIN_SCRIPT, "--profile", profile]
     for key, flag in (('epochs', '--epochs'), ('batch_size', '--batch-size')):
         if payload.get(key):
             try:

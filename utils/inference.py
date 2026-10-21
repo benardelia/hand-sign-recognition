@@ -1,5 +1,5 @@
 """
-Profile-aware model loading and prediction, shared by app.py and realtime_holistic.py.
+Profile-aware model loading and prediction, shared by app.py and scripts/realtime_holistic.py.
 
 A model directory (Model/<profile>/) is self-describing via profile.json, so
 switching quality is just a different profile name.
@@ -84,13 +84,13 @@ class SignClassifier:
                     self.backend = 'keras-legacy'
                     self.loaded = True
                     logger.warning(f"No model for profile '{self.profile_name}'; using legacy {LEGACY_MODEL}. "
-                                   f"Run: python train_model.py --profile {self.profile_name}")
+                                   f"Run: python ml/train_model.py --profile {self.profile_name}")
             if self.loaded:
                 logger.info(f"Loaded model profile={self.profile_name} backend={self.backend} "
                             f"T={self.sequence_length} labels={self.labels}")
             else:
                 logger.info(f"No trained model for profile '{self.profile_name}'. "
-                            f"Train one with: python train_model.py --profile {self.profile_name}")
+                            f"Train one with: python ml/train_model.py --profile {self.profile_name}")
         except Exception as e:
             logger.error(f"Failed to load model for profile '{self.profile_name}': {e}")
         return self.loaded

@@ -1,5 +1,5 @@
 # Local machine: everything in requirements.txt plus webcam tools
-# (LOCAL_CAMERA=1 mode, realtime_holistic.py, collect_*.py, tools/parity_check.py legacy backend).
+# (LOCAL_CAMERA=1 mode, scripts/, legacy/, tools/parity_check.py legacy backend).
 -r requirements.txt
 opencv-python>=4.8.0
 mediapipe==0.10.14

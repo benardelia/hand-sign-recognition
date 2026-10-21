@@ -3,6 +3,10 @@ import numpy as np
 import os
 import sys
 import time
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.logger_config import setup_logger
 
 logger = setup_logger(__name__)
@@ -98,4 +102,4 @@ if __name__ == "__main__":
         visualize(sys.argv[1])
     else:
         logger.warning("No file provided.")
-        print("Usage: python visualize_landmarks.py <path_to_npy_file>")
+        print("Usage: python tools/visualize_landmarks.py <path_to_npy_file>")

@@ -4,8 +4,13 @@ import numpy as np
 import math
 import time
 import os
+import sys
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.logger_config import setup_logger
-from utils.normalization import normalize_landmarks
+from legacy.normalization import normalize_landmarks
 
 # Initialize Logger
 logger = setup_logger(__name__)

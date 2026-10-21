@@ -1,8 +1,8 @@
 """
 Train a sign classifier for one quality profile (see config/profiles.json).
 
-    python train_model.py --profile high
-    python train_model.py --profile all
+    python ml/train_model.py --profile high
+    python ml/train_model.py --profile all
 
 Every profile trains on the same raw holistic dataset (Data/Holistic_Landmarks,
 (T, 1662) .npy sequences). Output goes to Model/<profile>/:
@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 import time
 
 import numpy as np
@@ -23,6 +24,9 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from tensorflow.keras import layers
 from tensorflow.keras.callbacks import Callback, EarlyStopping
+
+# Run from the repo root (Data/, Model/, config/ are relative to it); make utils/ importable.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.features import (HOLISTIC_SIZE, augment_sequence, build_feature_spec, get_profile,
                             load_profiles, make_preprocess_layer, resample_sequence, select_features)
