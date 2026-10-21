@@ -7,26 +7,32 @@ enum InputSource { phone, glasses }
 class AppSettings extends ChangeNotifier {
   AppSettings._(this._prefs);
 
-  static const defaultServerUrl = 'https://handsign.duckdns.org';
+  static const defaultServerUrl =
+      'http://192.168.0.3:5001'; // 'https://handsign.duckdns.org';
   static const defaultStreamUrl = 'http://192.168.4.1:81/stream';
 
   final SharedPreferences _prefs;
 
-  static Future<AppSettings> load() async => AppSettings._(await SharedPreferences.getInstance());
+  static Future<AppSettings> load() async =>
+      AppSettings._(await SharedPreferences.getInstance());
 
   /// Flask hub that serves trained models and receives samples.
   String get serverUrl => _prefs.getString('serverUrl') ?? defaultServerUrl;
-  set serverUrl(String v) => _set('serverUrl', v.trim().replaceAll(RegExp(r'/+$'), ''));
+  set serverUrl(String v) =>
+      _set('serverUrl', v.trim().replaceAll(RegExp(r'/+$'), ''));
 
   /// Quality profile (config/profiles.json): 'low' for glasses / mid-range phones, 'high' for flagships.
   String get profile => _prefs.getString('profile') ?? 'low';
   set profile(String v) => _set('profile', v);
 
-  InputSource get source => InputSource.values.byName(_prefs.getString('source') ?? InputSource.phone.name);
+  InputSource get source => InputSource.values.byName(
+    _prefs.getString('source') ?? InputSource.phone.name,
+  );
   set source(InputSource v) => _set('source', v.name);
 
   /// MJPEG stream of the glasses camera; filled automatically from the glasses over BLE when available.
-  String get glassesStreamUrl => _prefs.getString('glassesStreamUrl') ?? defaultStreamUrl;
+  String get glassesStreamUrl =>
+      _prefs.getString('glassesStreamUrl') ?? defaultStreamUrl;
   set glassesStreamUrl(String v) => _set('glassesStreamUrl', v.trim());
 
   /// Clockwise rotation applied to camera frames; -1 = automatic (sensor orientation).
