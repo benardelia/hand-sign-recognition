@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../settings.dart';
+import 'context_menu.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.settings});
@@ -70,6 +71,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             if (s.source == InputSource.glasses)
               TextField(
+                contextMenuBuilder: flutterContextMenu,
                 controller: _stream,
                 decoration: const InputDecoration(
                   labelText: 'Glasses stream URL',
@@ -113,11 +115,13 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const _Header('Server (model updates & data collection)'),
             TextField(
+              contextMenuBuilder: flutterContextMenu,
               controller: _server,
               decoration: const InputDecoration(labelText: 'Server URL'),
               keyboardType: TextInputType.url,
             ),
             TextField(
+              contextMenuBuilder: flutterContextMenu,
               controller: _token,
               decoration: const InputDecoration(labelText: 'Upload token (optional)'),
               obscureText: true,

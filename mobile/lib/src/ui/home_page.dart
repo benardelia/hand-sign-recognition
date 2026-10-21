@@ -11,6 +11,7 @@ import '../model_store.dart';
 import '../settings.dart';
 import '../sign_classifier.dart';
 import '../translation_pipeline.dart';
+import 'context_menu.dart';
 import 'landmark_painter.dart';
 import 'settings_page.dart';
 
@@ -141,6 +142,7 @@ class _HomePageState extends State<HomePage> {
       builder: (context) => AlertDialog(
         title: const Text('Record a training sample'),
         content: TextField(
+          contextMenuBuilder: flutterContextMenu,
           controller: controller,
           autofocus: true,
           textCapitalization: TextCapitalization.characters,
