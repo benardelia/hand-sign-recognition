@@ -1,11 +1,21 @@
 name: Deploy to VPS
 
 on:
-  push:
+  # Deploy when a pull request into main is merged (closed without merging does nothing).
+  pull_request:
+    types: [ closed ]
     branches: [ "main" ]
+  # Manual deploy from the Actions tab ("Run workflow"), e.g. after a direct push to main.
+  workflow_dispatch:
+
+# Never run two deploys at once; a newer one waits for the running one.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - name: Deploy to VPS via SSH
@@ -15,11 +25,18 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            set -e
             # 1. Navigate to the project directory on your server
             cd /var/www/hand-sign-recognition
-            
-            # 2. Pull the latest code from the main branch
+
+            # 2. Pull the latest code from the main branch.
+            #    .env is no longer tracked in git; keep the server's copy if a pull removes it.
+            if [ -f .env ]; then cp .env ../hand-sign-recognition.env.backup; fi
             git pull origin main
-            
+            if [ ! -f .env ] && [ -f ../hand-sign-recognition.env.backup ]; then
+              cp ../hand-sign-recognition.env.backup .env
+              echo "Restored .env from backup"
+            fi
+
             # 3. Rebuild and restart the container using production docker-compose
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build web
