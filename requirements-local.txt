@@ -1,0 +1,7 @@
+# Local machine: everything in requirements.txt plus webcam tools
+# (LOCAL_CAMERA=1 mode, scripts/, legacy/, tools/parity_check.py legacy backend).
+-r requirements.txt
+opencv-python>=4.8.0
+mediapipe==0.10.14
+cvzone>=1.5.6
+pyarrow>=14.0.0,<18  # tools/import_media.py kaggle (18+ needs NumPy 2; TF 2.15 needs NumPy 1)

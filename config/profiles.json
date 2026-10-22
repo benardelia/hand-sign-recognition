@@ -1,0 +1,65 @@
+{
+  "default_profile": "high",
+  "dataset": {
+    "record_seconds": 1.0,
+    "countdown_seconds": 3,
+    "mirrored": true,
+    "note": "Every client mirrors the camera frame (selfie view) before landmark extraction, and records ~record_seconds of frames per sample."
+  },
+  "profiles": {
+    "low": {
+      "description": "Glasses camera -> mid-range phone. Hands + 7 upper-body points.",
+      "target": "mobile",
+      "camera": {"width": 480, "height": 360, "fps": 15},
+      "sequence_length": 15,
+      "landmarks": {
+        "pose": [0, 11, 12, 13, 14, 15, 16],
+        "face": [],
+        "left_hand": "all",
+        "right_hand": "all"
+      },
+      "normalize": true,
+      "use_pose_z": false,
+      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "drop_face": 0.0, "copies": 3},
+      "model": {"arch": "cnn_small", "epochs": 120, "batch_size": 32},
+      "export": {"tflite": true, "quantization": "dynamic_int8"}
+    },
+    "high": {
+      "description": "Flagship phone. Hands + upper body + lips/eyebrows (non-manual markers).",
+      "target": "mobile",
+      "camera": {"width": 640, "height": 480, "fps": 30},
+      "sequence_length": 30,
+      "landmarks": {
+        "pose": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24],
+        "face": [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 146, 91, 181, 84, 17, 314, 405, 321, 375,
+                 78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308,
+                 70, 63, 105, 66, 107, 55, 65, 52, 53, 46,
+                 300, 293, 334, 296, 336, 285, 295, 282, 283, 276],
+        "left_hand": "all",
+        "right_hand": "all"
+      },
+      "normalize": true,
+      "use_pose_z": false,
+      "augment": {"mirror": true, "time_warp": 0.2, "noise": 0.01, "drop_face": 0.25, "copies": 3},
+      "model": {"arch": "cnn", "epochs": 150, "batch_size": 32},
+      "export": {"tflite": true, "quantization": "float16"}
+    },
+    "experimental": {
+      "description": "Powerful PC / GPU. Full holistic (pose, full face mesh, hands), larger recurrent model.",
+      "target": "desktop",
+      "camera": {"width": 1280, "height": 720, "fps": 30},
+      "sequence_length": 30,
+      "landmarks": {
+        "pose": "all",
+        "face": "all",
+        "left_hand": "all",
+        "right_hand": "all"
+      },
+      "normalize": true,
+      "use_pose_z": false,
+      "augment": {"mirror": false, "time_warp": 0.2, "noise": 0.005, "drop_face": 0.25, "copies": 2},
+      "model": {"arch": "cnn_transformer", "epochs": 150, "batch_size": 32},
+      "export": {"tflite": false, "quantization": "none"}
+    }
+  }
+}

@@ -20,3 +20,6 @@ jobs:
         run: |
           cp .env.example .env
           docker compose build web
+
+      - name: Run tests
+        run: docker compose run --rm --no-deps web python -m unittest discover tests

@@ -10,3 +10,14 @@ __pycache__/
 .DS_Store
 .vscode/
 .idea/
+
+# Not part of the server image: phone app, glasses firmware, docs, tests' scratch
+mobile/
+firmware/
+docs/
+node_modules/
+*.log
+
+# Datasets and models are mounted at runtime (docker-compose volume), not baked in
+Data/
+Model/

@@ -17,14 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
     initTabs();
     initClock();
     fetchSigns();
-    initRealtimePoll();
     initSpeechSynthesis();
     initClipboard();
     initDatasetForm();
     initModelTrainer();
     initLandmarkPlayer();
-    initCameraSelector();
-    initClientWebcamStream();
+    initMode();
 });
 
 // --- CLOCK COMPONENT ---
@@ -80,37 +78,31 @@ function switchTab(tabId) {
         fetchSigns();
     } else if (tabId === 'translator') {
         titleEl.textContent = 'Live Sign Translator';
-        subtitleEl.textContent = 'Live camera translation powered by MediaPipe Holistic and LSTM Neural Networks.';
-        if (!isClientWebcamActive) {
-            document.getElementById('webcam-feed-translator').src = '/video_feed';
-        }
-        document.getElementById('webcam-feed-builder').src = '';
+        subtitleEl.textContent = 'Live camera translation powered by MediaPipe Holistic and on-device sized models.';
     } else if (tabId === 'builder') {
         titleEl.textContent = 'Dataset Builder';
         subtitleEl.textContent = 'Collect new sign landmark sequences to train the model.';
-        if (!isClientWebcamActive) {
-            document.getElementById('webcam-feed-builder').src = '/video_feed';
-        }
-        document.getElementById('webcam-feed-translator').src = '';
         fetchSigns();
     } else if (tabId === 'trainer') {
-        titleEl.textContent = 'LSTM Model Trainer';
-        subtitleEl.textContent = 'Train your custom neural network with live analytics outputs.';
-        document.getElementById('webcam-feed-translator').src = '';
-        document.getElementById('webcam-feed-builder').src = '';
+        titleEl.textContent = 'Model Trainer';
+        subtitleEl.textContent = 'Train a quality profile (low / high / experimental) with live analytics outputs.';
     } else if (tabId === 'player') {
         titleEl.textContent = 'Visual Landmark Player';
         subtitleEl.textContent = 'Verify and replay collected skeletal landmark sequence files (.npy).';
-        document.getElementById('webcam-feed-translator').src = '';
-        document.getElementById('webcam-feed-builder').src = '';
         fetchNpyFilesList();
     }
     
     activeTab = tabId;
+    if (tabId === 'translator' || tabId === 'builder') {
+        activateFeed(tabId);
+    } else {
+        deactivateFeeds();
+    }
 }
 
 // --- REAL-TIME POLLING ---
 function initRealtimePoll() {
+    // Local camera mode only: the server owns the camera and the translation state.
     statusInterval = setInterval(() => {
         // Poll status only if we are in translator or builder tabs
         if (activeTab !== 'translator' && activeTab !== 'builder') return;
@@ -130,15 +122,9 @@ function updateUIState(data) {
     const statusText = document.getElementById('sys-status-text');
     const statusDot = document.getElementById('sys-status-dot');
     
-    if (data.model_loaded) {
-        modelBadge.innerHTML = `<i class="fa-solid fa-circle-nodes"></i> Holistic Active`;
-        document.getElementById('stat-model-loaded').textContent = 'LOADED (Active)';
-        document.getElementById('stat-model-loaded').className = 'highlighted-text';
-    } else {
-        modelBadge.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: var(--yellow)"></i> No Model`;
-        document.getElementById('stat-model-loaded').textContent = 'NOT TRAINED';
-        document.getElementById('stat-model-loaded').className = 'text-danger';
-    }
+    const profileName = (data.profile || activeProfile || '').toUpperCase();
+    modelBadge.textContent = data.model_loaded ? `${profileName} model` : `${profileName}: no model`;
+    modelBadge.style.color = data.model_loaded ? '' : 'var(--yellow)';
     
     // 2. Manage states of translation screen
     if (activeTab === 'translator') {
@@ -168,7 +154,12 @@ function updateUIState(data) {
         }
     }
     
-    // 3. Manage states of recording
+    renderRecordingState(data);
+}
+
+function renderRecordingState(data) {
+    const statusText = document.getElementById('sys-status-text');
+    const statusDot = document.getElementById('sys-status-dot');
     const startRecordBtn = document.getElementById('start-record-btn');
     if (data.is_recording) {
         statusDot.className = 'dot pulse yellow';
@@ -194,20 +185,31 @@ function updateUIState(data) {
                 rNums.textContent = 'Preparing...';
             } else if (data.recording_status === 'recording') {
                 rTitle.textContent = 'CAPTURING LANDMARKS';
-                const percent = (data.recording_frames_collected / 30) * 100;
+                const percent = Math.round((data.recording_progress || 0) * 100);
                 rFill.style.width = `${percent}%`;
                 rFill.style.background = 'linear-gradient(90deg, var(--pink), var(--primary))';
-                rNums.textContent = `Frame ${data.recording_frames_collected} / 30`;
-            } else if (data.recording_status === 'saving' || data.recording_status === 'saved') {
+                rNums.textContent = data.recording_frames_collected
+                    ? `${data.recording_frames_collected} frames captured`
+                    : `${percent}%`;
+            } else if (data.recording_status === 'saving') {
+                rTitle.textContent = 'UPLOADING SEQUENCE...';
+                rFill.style.width = '100%';
+                rFill.style.background = 'var(--primary)';
+                rNums.textContent = 'Saving dataset...';
+            } else if (data.recording_status === 'saved') {
                 rTitle.textContent = 'SEQUENCE SAVED!';
                 rFill.style.width = '100%';
                 rFill.style.background = 'var(--green)';
-                rNums.textContent = 'Saving dataset...';
+                rNums.textContent = data.recording_frames_collected ? `${data.recording_frames_collected} frames` : 'Saved';
+            } else if (data.recording_status === 'error') {
+                rTitle.textContent = 'SAMPLE REJECTED';
+                rFill.style.width = '100%';
+                rFill.style.background = 'var(--red, #ef4444)';
+                rNums.textContent = data.recording_error || 'Upload failed';
             }
         }
     } else {
-        statusDot.className = 'dot pulse green';
-        statusText.textContent = 'Webcam Active';
+        if (wasRecording) setSystemStatus('green', cameraStatusText());
         
         if (startRecordBtn) {
             startRecordBtn.disabled = false;
@@ -262,9 +264,13 @@ function initClipboard() {
     
     const clearBtn = document.getElementById('clear-sentence-btn');
     clearBtn.addEventListener('click', () => {
-        fetch('/api/clear_sentence', { method: 'POST' })
-            .then(res => res.json())
+        const req = appMode === 'local'
+            ? fetch('/api/clear_sentence', { method: 'POST' })
+            : fetch('/api/session/clear', { method: 'POST', headers: { 'X-Session-Id': sessionId, 'X-Profile': activeProfile } });
+        req.then(res => res.json())
             .then(() => {
+                pendingFrames = [];
+                document.getElementById('active-sentence').textContent = 'Sentence Cleared.';
                 logReconstruction('Cleared sentence buffer.');
             });
     });
@@ -314,7 +320,7 @@ function renderOverviewTable() {
     tbody.innerHTML = signsData.map(sign => `
         <tr>
             <td><strong class="highlighted-text">${sign.name}</strong></td>
-            <td>${sign.samples} sequence files</td>
+            <td>${sign.samples} sequence files<br><span class="text-muted small">${formatSources(sign.sources)}</span></td>
             <td>
                 <div class="table-actions">
                     <button class="btn btn-secondary btn-icon" onclick="switchTab('player')" title="Inspect Landmarks">
@@ -343,8 +349,15 @@ function renderSignsGrid() {
             </button>
             <div class="sign-name">${sign.name}</div>
             <div class="sign-count"><i class="fa-solid fa-folder-open"></i> ${sign.samples} samples</div>
+            <div class="sign-sources text-muted small">${formatSources(sign.sources)}</div>
         </div>
     `).join('');
+}
+
+// "web 12 · phone 3" - where the samples of a sign were recorded (dataset balance check).
+function formatSources(sources) {
+    if (!sources) return '';
+    return Object.entries(sources).map(([src, n]) => `${src} ${n}`).join(' · ');
 }
 
 function initDatasetForm() {
@@ -357,6 +370,11 @@ function initDatasetForm() {
         
         // Sound prompt: countdown starts
         speakText("Preparing recording.");
+        
+        if (appMode === 'browser') {
+            startBrowserRecording(label);
+            return;
+        }
         
         fetch('/api/start_recording', {
             method: 'POST',
@@ -395,12 +413,13 @@ function initModelTrainer() {
     initTrainingChart();
     
     trainBtn.addEventListener('click', () => {
-        const epochs = parseInt(epochInput.value) || 150;
-        const batch = parseInt(batchInput.value) || 32;
+        const epochs = parseInt(epochInput.value) || null;
+        const batch = parseInt(batchInput.value) || null;
+        const profile = document.getElementById('train-profile').value || activeProfile;
         
         // Show training info box
         document.getElementById('training-progress-info').classList.remove('hidden');
-        document.getElementById('total-epochs').textContent = epochs;
+        document.getElementById('total-epochs').textContent = epochs || 'profile default';
         
         // Clear terminal
         const term = document.getElementById('training-terminal-console');
@@ -409,7 +428,11 @@ function initModelTrainer() {
         // Reset chart data
         resetChartData();
         
-        fetch('/api/train', { method: 'POST' })
+        apiFetch('/api/train', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile, epochs, batch_size: batch })
+        })
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'success') {
@@ -440,6 +463,8 @@ function connectTrainingLogsStream() {
             term.scrollTop = term.scrollHeight;
         } 
         else if (data.type === 'epoch_metrics') {
+            // A new profile started ('all' trains several in a row)
+            if (data.epoch === 1) resetChartData();
             // Update stats indicators
             document.getElementById('current-epoch').textContent = data.epoch;
             document.getElementById('mini-loss').textContent = data.loss.toFixed(4);
@@ -470,8 +495,9 @@ function connectTrainingLogsStream() {
             
             speakText(data.code === 0 ? "Model training complete!" : "Model training failed.");
             
-            // Reload overall metrics
+            // Reload overall metrics and the trained-profile list
             fetchSigns();
+            refreshConfig();
         }
     };
     
@@ -720,7 +746,9 @@ function loadNpySequence(filepath, element) {
             playerFrameIdx = 0;
             
             document.getElementById('active-file-title').textContent = data.filename;
-            document.getElementById('active-file-badge').textContent = 'Holistic (30 Frames)';
+            const source = data.meta && data.meta.source ? ` · ${data.meta.source}` : '';
+            document.getElementById('active-file-badge').textContent = `Holistic (${data.frames.length} frames${source})`;
+            document.getElementById('player-scrubber').max = data.frames.length - 1;
             document.getElementById('player-scrubber').value = 0;
             
             drawActiveFrame();
@@ -893,7 +921,7 @@ function confirmDeleteSign(label, event) {
     }
     
     // Call delete sign endpoint
-    fetch('/api/delete_sign', {
+    apiFetch('/api/delete_sign', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ label: label })
@@ -945,7 +973,7 @@ function confirmDeleteFile(filepath, filename, event) {
     }
     
     // Call delete file endpoint
-    fetch('/api/delete_file', {
+    apiFetch('/api/delete_file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: filepath })
@@ -983,33 +1011,338 @@ function confirmDeleteFile(filepath, filename, event) {
     });
 }
 
-// --- CAMERA SOURCE SELECTOR ---
-function initCameraSelector() {
-    fetchAvailableCameras();
+// --- MODE, QUALITY PROFILE & ACCESS TOKEN ---
+// 'browser': landmarks are extracted in this page (static/js/pipeline.js) and only numbers are
+//            sent to the server. Works on any HTTPS deployment and for many users at once.
+// 'local'  : the Flask host's own webcam (LOCAL_CAMERA=1), streamed back as MJPEG.
+let appConfig = null;
+let appMode = 'browser';
+let activeProfile = null;
+let pipeline = null;
+let pipelineLoading = null;
+let selectedDeviceId = '';
+let pendingFrames = [];
+let isSendingFrames = false;
+const sessionId = getSessionId();
+const recorder = { status: 'idle', label: '', frames: [], times: [], start: 0, countdownEnd: 0, error: '' };
+const MIN_RECORD_FRAMES = 8;
+
+function getSessionId() {
+    let id = null;
+    try { id = sessionStorage.getItem('handsign-session'); } catch (e) { /* storage unavailable */ }
+    if (!id) {
+        id = window.crypto && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        try { sessionStorage.setItem('handsign-session', id); } catch (e) { /* storage unavailable */ }
+    }
+    return id;
+}
+
+function storedValue(key, fallback) {
+    try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; }
+}
+
+function storeValue(key, value) {
+    try { localStorage.setItem(key, value); } catch (e) { /* storage unavailable */ }
+}
+
+// fetch() that sends the optional access token and asks for it once when the server answers 401.
+async function apiFetch(url, options = {}) {
+    const headers = Object.assign({}, options.headers || {});
+    const token = storedValue('handsign-token', '');
+    if (token) headers['X-Handsign-Token'] = token;
+    let res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+        const entered = prompt('This server requires an access token for this action:');
+        if (entered) {
+            storeValue('handsign-token', entered.trim());
+            headers['X-Handsign-Token'] = entered.trim();
+            res = await fetch(url, { ...options, headers });
+        }
+    }
+    return res;
+}
+
+async function initMode() {
+    try {
+        appConfig = await (await fetch('/api/config')).json();
+    } catch (e) {
+        console.error('Failed to load /api/config', e);
+        setSystemStatus('red', 'Server unreachable');
+        return;
+    }
+    appMode = appConfig.local_camera ? 'local' : 'browser';
+    activeProfile = storedValue('handsign-profile', appConfig.default_profile);
+    if (!appConfig.profiles[activeProfile]) activeProfile = appConfig.default_profile;
+    renderProfileControls();
+
+    if (appMode === 'local') {
+        initRealtimePoll();
+        fetchAvailableCameras();
+    } else {
+        await listBrowserCameras();
+    }
+    setSystemStatus('yellow', 'Camera idle');
+    setInterval(updateFpsStat, 1000);
+    if (activeTab === 'translator' || activeTab === 'builder') activateFeed(activeTab);
+}
+
+async function refreshConfig() {
+    try {
+        appConfig = await (await fetch('/api/config')).json();
+        renderProfileControls();
+    } catch (e) {
+        console.error('Failed to refresh config', e);
+    }
+}
+
+function setSystemStatus(color, text) {
+    const dot = document.getElementById('sys-status-dot');
+    const label = document.getElementById('sys-status-text');
+    if (dot) dot.className = `dot pulse ${color}`;
+    if (label) label.textContent = text;
+}
+
+function cameraStatusText() {
+    if (appMode === 'local') return 'Local camera';
+    return pipeline && pipeline.running ? `Browser camera (${pipeline.delegate})` : 'Camera idle';
+}
+
+function profileLabel(name, p) {
+    return `${name.toUpperCase()} · ${p.camera.width}x${p.camera.height} @ ${p.camera.fps}fps${p.trained ? '' : ' (untrained)'}`;
+}
+
+function renderProfileControls() {
+    const select = document.getElementById('profile-select');
+    if (select) {
+        select.innerHTML = Object.entries(appConfig.profiles).map(([name, p]) =>
+            `<option value="${name}" ${name === activeProfile ? 'selected' : ''}>${profileLabel(name, p)}</option>`
+        ).join('');
+        select.onchange = () => changeProfile(select.value);
+    }
+
+    const trainSelect = document.getElementById('train-profile');
+    if (trainSelect) {
+        const current = trainSelect.value || activeProfile;
+        trainSelect.innerHTML = Object.keys(appConfig.profiles).map(name =>
+            `<option value="${name}" ${name === current ? 'selected' : ''}>${name.toUpperCase()}</option>`
+        ).join('') + `<option value="all" ${current === 'all' ? 'selected' : ''}>ALL PROFILES</option>`;
+    }
+
+    const trained = Object.values(appConfig.profiles).filter(p => p.trained).length;
+    const stat = document.getElementById('stat-model-loaded');
+    if (stat) {
+        stat.textContent = `${trained} / ${Object.keys(appConfig.profiles).length} trained`;
+        stat.className = trained ? 'highlighted-text' : 'text-danger';
+    }
+
+    const tbody = document.getElementById('models-tbody');
+    if (tbody) {
+        tbody.innerHTML = Object.entries(appConfig.profiles).map(([name, p]) => {
+            const m = p.metrics || {};
+            const acc = m.tflite_val_accuracy ?? m.val_accuracy;
+            const size = m.tflite_bytes ? `${(m.tflite_bytes / 1024).toFixed(0)} KB tflite` : (p.target === 'desktop' ? 'Keras (PC)' : '-');
+            return `<tr>
+                <td><strong class="highlighted-text">${name.toUpperCase()}</strong><br><span class="text-muted small">${p.description}</span></td>
+                <td>${p.trained ? `v${p.version}` : '<span class="text-danger">not trained</span>'}</td>
+                <td>${acc !== undefined ? `${(acc * 100).toFixed(0)}%` : '-'}</td>
+                <td>${size}</td>
+            </tr>`;
+        }).join('');
+    }
+    updateModelBadge();
+}
+
+function updateModelBadge() {
+    const badge = document.getElementById('active-model-name');
+    const p = appConfig && appConfig.profiles[activeProfile];
+    if (!badge || !p) return;
+    badge.textContent = p.trained ? `${activeProfile.toUpperCase()} model` : `${activeProfile.toUpperCase()}: not trained`;
+    badge.style.color = p.trained ? '' : 'var(--yellow)';
+}
+
+function updateFpsStat() {
+    const el = document.getElementById('stat-fps');
+    if (!el) return;
+    if (appMode === 'browser' && pipeline && pipeline.running) {
+        el.textContent = `${Math.round(pipeline.fpsEstimate)} FPS`;
+    } else if (appConfig && appConfig.profiles[activeProfile]) {
+        el.textContent = `${appConfig.profiles[activeProfile].camera.fps} FPS target`;
+    }
+}
+
+function changeProfile(name) {
+    if (appMode === 'local') {
+        alert('Local camera mode uses the server PROFILE setting. Restart the server with PROFILE=' + name + ' to switch.');
+        document.getElementById('profile-select').value = activeProfile;
+        return;
+    }
+    activeProfile = name;
+    storeValue('handsign-profile', name);
+    pendingFrames = [];
+    updateModelBadge();
+    if (pipeline) {
+        pipeline.setCamera(appConfig.profiles[name].camera);
+        if (pipeline.stream) restartBrowserCamera();
+    }
+    logReconstruction(`Quality profile: ${profileLabel(name, appConfig.profiles[name])}`);
+}
+
+// --- CAMERA FEEDS ---
+function feedElements(tabId) {
+    return tabId === 'translator'
+        ? { img: document.getElementById('webcam-feed-translator'), container: document.querySelector('#tab-translator .camera-container') }
+        : { img: document.getElementById('webcam-feed-builder'), container: document.querySelector('#tab-builder .camera-container-small') };
+}
+
+function activateFeed(tabId) {
+    if (!appConfig) return; // initMode() activates the feed once the config is loaded
+    const { img, container } = feedElements(tabId);
+    const other = feedElements(tabId === 'translator' ? 'builder' : 'translator');
+    if (appMode === 'local') {
+        other.img.src = '';
+        img.style.display = '';
+        img.src = '/video_feed';
+        setSystemStatus('green', 'Local camera');
+        return;
+    }
+    img.style.display = 'none';
+    other.img.style.display = 'none';
+    startBrowserPipeline(container);
+}
+
+function deactivateFeeds() {
+    if (appMode === 'local') {
+        document.getElementById('webcam-feed-translator').src = '';
+        document.getElementById('webcam-feed-builder').src = '';
+        return;
+    }
+    if (pipeline) {
+        pipeline.stop();
+        pipeline.stopCamera();
+    }
+    pendingFrames = [];
+    setSystemStatus('yellow', 'Camera idle');
+}
+
+function showFeedMessage(container, message) {
+    let msg = container.querySelector('.feed-message');
+    if (!msg) {
+        msg = document.createElement('div');
+        msg.className = 'feed-message';
+        container.prepend(msg);
+    }
+    msg.textContent = message;
+    msg.style.display = message ? '' : 'none';
+}
+
+async function loadPipeline() {
+    setSystemStatus('yellow', 'Loading MediaPipe...');
+    if (!window.HandsignPipeline) {
+        await new Promise(resolve => window.addEventListener('handsign-pipeline-ready', resolve, { once: true }));
+    }
+    const p = new window.HandsignPipeline(appConfig.mediapipe);
+    await p.load();
+    p.onFrame = handleBrowserFrame;
+    p.onOverlay = drawRecordingOverlay;
+    p.onError = () => {
+        setSystemStatus('red', 'Tracking failed (WebGL required)');
+        const container = p.canvas.parentElement;
+        if (container) showFeedMessage(container, 'Landmark tracking failed. Enable hardware acceleration / WebGL in your browser and reload.');
+    };
+    pipeline = p;
+}
+
+async function startBrowserPipeline(container) {
+    if (!window.isSecureContext || !navigator.mediaDevices) {
+        setSystemStatus('red', 'Camera Blocked (HTTPS Required)');
+        showFeedMessage(container, 'Camera access needs HTTPS (or http://localhost). Open this site over HTTPS.');
+        return;
+    }
+    showFeedMessage(container, 'Loading hand/body tracking model...');
+    try {
+        if (!pipeline) {
+            pipelineLoading = pipelineLoading || loadPipeline();
+            await pipelineLoading;
+        }
+    } catch (e) {
+        console.error('MediaPipe failed to load', e);
+        pipelineLoading = null;
+        setSystemStatus('red', 'Tracking model failed to load');
+        showFeedMessage(container, 'Could not load MediaPipe (check your connection) - reload to retry.');
+        return;
+    }
+    // The user may have left the camera tabs while the model was loading.
+    if (activeTab !== 'translator' && activeTab !== 'builder') return;
+
+    container.prepend(pipeline.canvas);
+    pipeline.setCamera(appConfig.profiles[activeProfile].camera);
+    try {
+        if (!pipeline.stream) {
+            showFeedMessage(container, 'Waiting for camera permission...');
+            await pipeline.startCamera(selectedDeviceId);
+            await listBrowserCameras();
+        }
+    } catch (err) {
+        console.warn('Could not access browser camera:', err);
+        setSystemStatus('red', 'Camera Blocked / Unavailable');
+        showFeedMessage(container, 'Camera blocked or unavailable. Allow camera access and reload.');
+        return;
+    }
+    showFeedMessage(container, '');
+    pipeline.start();
+    setSystemStatus('green', cameraStatusText());
+}
+
+async function restartBrowserCamera() {
+    if (!pipeline) return;
+    try {
+        await pipeline.startCamera(selectedDeviceId);
+    } catch (err) {
+        console.warn('Camera restart failed:', err);
+        setSystemStatus('red', 'Camera Blocked / Unavailable');
+    }
+}
+
+async function listBrowserCameras() {
+    const select = document.getElementById('camera-source-select');
+    if (!select || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    if (!devices.length) {
+        select.innerHTML = '<option value="">Browser camera</option>';
+        return;
+    }
+    const activeId = pipeline && pipeline.stream
+        ? (pipeline.stream.getVideoTracks()[0].getSettings().deviceId || selectedDeviceId)
+        : selectedDeviceId;
+    select.innerHTML = devices.map((d, i) =>
+        `<option value="${d.deviceId}" ${d.deviceId === activeId ? 'selected' : ''}>${d.label || `Camera ${i + 1}`}</option>`
+    ).join('');
 }
 
 function fetchAvailableCameras() {
     const select = document.getElementById('camera-source-select');
     if (!select) return;
-    
     fetch('/api/cameras')
         .then(res => res.json())
         .then(data => {
-            select.innerHTML = data.cameras.map(cam => `
-                <option value="${cam.id}" ${cam.active ? 'selected' : ''}>
-                    ${cam.name}
-                </option>
-            `).join('');
+            select.innerHTML = data.cameras.map(cam =>
+                `<option value="${cam.id}" ${cam.active ? 'selected' : ''}>${cam.name}</option>`
+            ).join('');
         })
         .catch(err => console.error('Error fetching available cameras:', err));
 }
 
 function changeCameraSource(cameraId) {
+    if (appMode === 'browser') {
+        selectedDeviceId = cameraId;
+        if (pipeline && pipeline.stream) restartBrowserCamera();
+        return;
+    }
     const select = document.getElementById('camera-source-select');
-    if (select) select.disabled = true; // Temporary disable to prevent spam
-    
+    if (select) select.disabled = true;
     speakText("Switching camera.");
-    
     fetch('/api/select_camera', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1018,16 +1351,9 @@ function changeCameraSource(cameraId) {
     .then(res => res.json())
     .then(data => {
         if (data.status === 'success') {
-            console.log(data.message);
-            // Refresh feeds by reloading sources if they are currently streaming
-            const transFeed = document.getElementById('webcam-feed-translator');
-            const buildFeed = document.getElementById('webcam-feed-builder');
-            
-            if (transFeed && transFeed.src.includes('/video_feed')) {
-                transFeed.src = '/video_feed?' + new Date().getTime();
-            }
-            if (buildFeed && buildFeed.src.includes('/video_feed')) {
-                buildFeed.src = '/video_feed?' + new Date().getTime();
+            for (const id of ['webcam-feed-translator', 'webcam-feed-builder']) {
+                const feed = document.getElementById(id);
+                if (feed && feed.src.includes('/video_feed')) feed.src = '/video_feed?' + Date.now();
             }
         } else {
             alert(data.message || "Failed to switch camera source.");
@@ -1039,94 +1365,184 @@ function changeCameraSource(cameraId) {
     })
     .finally(() => {
         if (select) select.disabled = false;
-        fetchAvailableCameras(); // Re-sync state
+        fetchAvailableCameras();
     });
 }
 
-// --- CLIENT BROWSER WEBCAM STREAMING (FOR VPS / CLOUD DEPLOYMENTS) ---
-let clientWebcamStream = null;
-let clientWebcamVideo = null;
-let clientWebcamCanvas = null;
-let isClientWebcamActive = false;
-let streamingInterval = null;
-let isProcessingFrame = false;
-
-async function initClientWebcamStream() {
-    clientWebcamVideo = document.getElementById('client-webcam-video');
-    clientWebcamCanvas = document.getElementById('client-webcam-canvas');
-    if (!clientWebcamVideo || !clientWebcamCanvas) return;
-    
-    try {
-        clientWebcamStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }
-        });
-        clientWebcamVideo.srcObject = clientWebcamStream;
-        await clientWebcamVideo.play();
-        isClientWebcamActive = true;
-        console.log("Browser client webcam stream activated successfully.");
-        
-        const statusDot = document.getElementById('sys-status-dot');
-        const statusText = document.getElementById('sys-status-text');
-        if (statusDot) statusDot.className = 'dot pulse green';
-        if (statusText) statusText.textContent = 'Browser Camera Connected';
-        
-        startClientFrameStream();
-    } catch (err) {
-        console.warn("Could not access browser camera stream:", err);
-        const statusDot = document.getElementById('sys-status-dot');
-        const statusText = document.getElementById('sys-status-text');
-        if (statusDot) statusDot.className = 'dot red';
-        if (statusText) {
-            if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-                statusText.textContent = 'Camera Blocked (HTTPS Required)';
-            } else {
-                statusText.textContent = 'Camera Blocked / Unavailable';
-            }
+// --- BROWSER PIPELINE: LIVE TRANSLATION & RECORDING ---
+function handleBrowserFrame(frame, ts) {
+    if (recorder.status === 'countdown' && ts >= recorder.countdownEnd) {
+        recorder.status = 'recording';
+        recorder.start = ts;
+        recorder.frames = [];
+        recorder.times = [];
+    }
+    if (recorder.status === 'recording') {
+        recorder.frames.push(frame);
+        recorder.times.push(ts);
+        // Slow devices: keep recording until there are enough frames (max 3x the duration).
+        const elapsed = ts - recorder.start;
+        const target = appConfig.dataset.record_seconds * 1000;
+        if ((elapsed >= target && recorder.frames.length >= MIN_RECORD_FRAMES) || elapsed >= 3 * target) {
+            finishBrowserRecording();
         }
+        renderRecordingState(recorderState());
+        return;
+    }
+    if (recorder.status === 'countdown') {
+        renderRecordingState(recorderState());
+        return;
+    }
+    if (activeTab === 'translator') {
+        pendingFrames.push(frame);
+        if (pendingFrames.length > 60) pendingFrames.splice(0, pendingFrames.length - 60);
+        flushFrames();
     }
 }
 
-function startClientFrameStream() {
-    if (streamingInterval) clearInterval(streamingInterval);
-    const ctx = clientWebcamCanvas.getContext('2d');
-    
-    streamingInterval = setInterval(async () => {
-        if (!isClientWebcamActive || isProcessingFrame) return;
-        if (activeTab !== 'translator' && activeTab !== 'builder') return;
-        if (!clientWebcamVideo || clientWebcamVideo.paused || clientWebcamVideo.ended) return;
-        
-        isProcessingFrame = true;
-        
-        clientWebcamCanvas.width = 640;
-        clientWebcamCanvas.height = 480;
-        ctx.drawImage(clientWebcamVideo, 0, 0, 640, 480);
-        
-        const base64Data = clientWebcamCanvas.toDataURL('image/jpeg', 0.65);
-        
-        try {
-            const res = await fetch('/api/process_frame', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: base64Data })
-            });
-            const data = await res.json();
-            
-            if (data.status === 'success' && data.annotated_image) {
-                const imgTranslator = document.getElementById('webcam-feed-translator');
-                const imgBuilder = document.getElementById('webcam-feed-builder');
-                
-                if (activeTab === 'translator' && imgTranslator) {
-                    imgTranslator.src = data.annotated_image;
-                } else if (activeTab === 'builder' && imgBuilder) {
-                    imgBuilder.src = data.annotated_image;
-                }
-                
-                updateUIState(data);
-            }
-        } catch (e) {
-            console.error("Frame streaming error:", e);
-        } finally {
-            isProcessingFrame = false;
+// Frames that arrive while a request is in flight are sent together in the next one.
+async function flushFrames() {
+    if (isSendingFrames || pendingFrames.length === 0) return;
+    isSendingFrames = true;
+    const batch = pendingFrames;
+    pendingFrames = [];
+    const body = new Float32Array(batch.length * 1662);
+    batch.forEach((f, i) => body.set(f, i * 1662));
+    try {
+        const res = await fetch('/api/stream/frames', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream', 'X-Session-Id': sessionId, 'X-Profile': activeProfile },
+            body: body.buffer
+        });
+        const data = await res.json();
+        if (data.status === 'success') updateUIState({ ...data, ...recorderState() });
+    } catch (e) {
+        console.error('Frame streaming error:', e);
+    } finally {
+        isSendingFrames = false;
+    }
+}
+
+function recorderState() {
+    return {
+        is_recording: recorder.status !== 'idle',
+        recording_status: recorder.status,
+        recording_label: recorder.label,
+        recording_frames_collected: recorder.frames.length,
+        recording_progress: recorder.status === 'recording' && recorder.times.length
+            ? Math.min(1, (recorder.times[recorder.times.length - 1] - recorder.start) / (appConfig.dataset.record_seconds * 1000))
+            : 0,
+        recording_error: recorder.error,
+    };
+}
+
+function startBrowserRecording(label) {
+    if (!pipeline || !pipeline.running) {
+        alert('The camera is not running yet. Allow camera access and wait for the preview to appear.');
+        return;
+    }
+    if (recorder.status !== 'idle') return;
+    Object.assign(recorder, {
+        status: 'countdown', label, frames: [], times: [], error: '',
+        countdownEnd: performance.now() + appConfig.dataset.countdown_seconds * 1000
+    });
+    renderRecordingState(recorderState());
+}
+
+function float32ToBase64(arr) {
+    const bytes = new Uint8Array(arr.buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(binary);
+}
+
+async function finishBrowserRecording() {
+    const frames = recorder.frames;
+    const times = recorder.times;
+    if (frames.length < MIN_RECORD_FRAMES) {
+        recorder.status = 'error';
+        recorder.error = `Only ${frames.length} frames captured - this device is too slow ` +
+            `(${Math.round(pipeline.fpsEstimate)} fps). Try the LOW profile.`;
+        renderRecordingState(recorderState());
+        setTimeout(() => { recorder.status = 'idle'; recorder.frames = []; renderRecordingState(recorderState()); }, 4000);
+        return;
+    }
+    recorder.status = 'saving';
+    renderRecordingState(recorderState());
+
+    const buf = new Float32Array(frames.length * 1662);
+    frames.forEach((f, i) => buf.set(f, i * 1662));
+    const t0 = times[0];
+    const duration = (times[times.length - 1] - t0) / 1000;
+    const meta = {
+        source: 'web',
+        profile: activeProfile,
+        mirrored: true,
+        fps: duration > 0 ? Math.round((frames.length - 1) / duration * 10) / 10 : null,
+        timestamps_ms: times.map(t => Math.round((t - t0) * 10) / 10),
+        resolution: [pipeline.work.width, pipeline.work.height],
+        delegate: pipeline.delegate,
+        user_agent: navigator.userAgent.slice(0, 200),
+    };
+    try {
+        const res = await apiFetch('/api/samples', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label: recorder.label, frames_b64: float32ToBase64(buf), meta })
+        });
+        const data = await res.json();
+        if (data.status === 'success') {
+            recorder.status = 'saved';
+            fetchSigns();
+        } else {
+            recorder.status = 'error';
+            recorder.error = data.message;
         }
-    }, 90);
+    } catch (e) {
+        recorder.status = 'error';
+        recorder.error = String(e);
+    }
+    renderRecordingState(recorderState());
+    setTimeout(() => {
+        recorder.status = 'idle';
+        recorder.frames = [];
+        renderRecordingState(recorderState());
+    }, recorder.status === 'error' ? 3000 : 1500);
+}
+
+function drawRecordingOverlay(ctx, w, h) {
+    if (recorder.status === 'idle') return;
+    ctx.save();
+    if (recorder.status === 'countdown') {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+        ctx.fillRect(0, 0, w, h);
+        const remaining = (recorder.countdownEnd - performance.now()) / 1000;
+        ctx.fillStyle = '#facc15';
+        ctx.font = `bold ${Math.round(h / 4)}px Outfit, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.fillText(remaining > 0 ? String(Math.ceil(remaining)) : 'GO!', w / 2, h / 2 + h / 12);
+        ctx.font = `${Math.round(h / 20)}px Outfit, sans-serif`;
+        ctx.fillStyle = '#fff';
+        ctx.fillText(`Prepare sign: '${recorder.label}'`, w / 2, h - 20);
+    } else if (recorder.status === 'recording') {
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(0, 0, w, h);
+        ctx.fillStyle = '#ef4444';
+        ctx.font = `bold ${Math.round(h / 18)}px Outfit, sans-serif`;
+        ctx.fillText('RECORDING...', 14, 36);
+    } else {
+        const ok = recorder.status !== 'error';
+        ctx.strokeStyle = ok ? '#10b981' : '#ef4444';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(0, 0, w, h);
+        ctx.fillStyle = ok ? '#10b981' : '#ef4444';
+        ctx.font = `bold ${Math.round(h / 14)}px Outfit, sans-serif`;
+        ctx.textAlign = 'center';
+        const text = { saving: 'UPLOADING...', saved: 'SEQUENCE SAVED!', error: 'REJECTED' }[recorder.status] || '';
+        ctx.fillText(text, w / 2, h / 2);
+    }
+    ctx.restore();
 }
