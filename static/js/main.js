@@ -1021,6 +1021,10 @@ let activeProfile = null;
 let pipeline = null;
 let pipelineLoading = null;
 let selectedDeviceId = '';
+let releaseTimer = null;
+// MediaPipe Holistic holds a few hundred MB (GPU textures + graph). Free it when no camera
+// tab has been open for this long; coming back reloads it from the browser cache.
+const RELEASE_AFTER_MS = 30000;
 let pendingFrames = [];
 let isSendingFrames = false;
 const sessionId = getSessionId();
@@ -1209,6 +1213,7 @@ function activateFeed(tabId) {
     }
     img.style.display = 'none';
     other.img.style.display = 'none';
+    clearTimeout(releaseTimer);
     startBrowserPipeline(container);
 }
 
@@ -1221,10 +1226,24 @@ function deactivateFeeds() {
     if (pipeline) {
         pipeline.stop();
         pipeline.stopCamera();
+        clearTimeout(releaseTimer);
+        releaseTimer = setTimeout(() => {
+            if (activeTab !== 'translator' && activeTab !== 'builder') pipeline.release();
+        }, RELEASE_AFTER_MS);
     }
     pendingFrames = [];
     setSystemStatus('yellow', 'Camera idle');
 }
+
+// Hidden browser tab: turn the camera off (privacy, CPU/GPU); resume when shown again.
+document.addEventListener('visibilitychange', () => {
+    if (!appConfig || appMode !== 'browser') return;
+    if (document.hidden) {
+        deactivateFeeds();
+    } else if (activeTab === 'translator' || activeTab === 'builder') {
+        activateFeed(activeTab);
+    }
+});
 
 function showFeedMessage(container, message) {
     let msg = container.querySelector('.feed-message');
@@ -1263,7 +1282,11 @@ async function startBrowserPipeline(container) {
     showFeedMessage(container, 'Loading hand/body tracking model...');
     try {
         if (!pipeline) {
-            pipelineLoading = pipelineLoading || loadPipeline();
+            pipelineLoading = pipelineLoading || loadPipeline().finally(() => { pipelineLoading = null; });
+            await pipelineLoading;
+        } else if (!pipeline.loaded) {
+            setSystemStatus('yellow', 'Loading MediaPipe...');
+            pipelineLoading = pipelineLoading || pipeline.load().finally(() => { pipelineLoading = null; });
             await pipelineLoading;
         }
     } catch (e) {

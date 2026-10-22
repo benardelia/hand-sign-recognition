@@ -52,12 +52,19 @@ export class HolisticPipeline {
         this.onOverlay = null;
         this.onError = null;
         this.failures = 0;
+        this.loopId = 0;
+    }
+
+    get loaded() {
+        return !!this.landmarker;
     }
 
     async load() {
-        const vision = await import(this.cfg.bundle);
+        if (this.landmarker) return;
+        const vision = this.vision || await import(this.cfg.bundle);
         this.vision = vision;
-        const fileset = await vision.FilesetResolver.forVisionTasks(this.cfg.wasm);
+        this.fileset = this.fileset || await vision.FilesetResolver.forVisionTasks(this.cfg.wasm);
+        const fileset = this.fileset;
         const options = (delegate) => ({
             baseOptions: { modelAssetPath: this.cfg.model, delegate },
             runningMode: 'VIDEO',
@@ -103,8 +110,11 @@ export class HolisticPipeline {
     start() {
         if (this.running) return;
         this.running = true;
+        // A loop id, not just the running flag: stop() then start() before the old loop's next
+        // frame would otherwise leave two loops alive.
+        const id = ++this.loopId;
         const tick = () => {
-            if (!this.running) return;
+            if (!this.running || id !== this.loopId) return;
             this._step();
             requestAnimationFrame(tick);
         };
@@ -113,11 +123,25 @@ export class HolisticPipeline {
 
     stop() {
         this.running = false;
+        this.loopId++;
+    }
+
+    /// Frees the MediaPipe graph and its GPU resources (the model is reloaded from the
+    /// browser cache by load()). The WebAssembly heap itself cannot shrink.
+    release() {
+        this.stop();
+        this.stopCamera();
+        if (this.landmarker) this.landmarker.close();
+        this.landmarker = null;
+        if (this.drawing && this.drawing.close) this.drawing.close();
+        this.drawing = null;
+        this.lastRun = 0;
+        this.fpsEstimate = 0;
     }
 
     _step() {
         const v = this.video;
-        if (!this.landmarker || v.readyState < 2 || !v.videoWidth) return;
+        if (!this.landmarker || !this.drawing || v.readyState < 2 || !v.videoWidth) return;
         const now = performance.now();
         if (now - this.lastRun < 1000 / this.camera.fps - 2) return;   // pace to the profile fps
         if (this.lastRun) this.fpsEstimate = 0.9 * this.fpsEstimate + 0.1 * (1000 / (now - this.lastRun));
