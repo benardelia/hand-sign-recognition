@@ -29,10 +29,22 @@ jobs:
             # 1. Navigate to the project directory on your server
             cd /var/www/hand-sign-recognition
 
-            # 2. Pull the latest code from the main branch.
-            #    .env is no longer tracked in git; keep the server's copy if a pull removes it.
+            # 2. Make the checkout match GitHub's main exactly. (git pull fails with "Not possible
+            #    to fast-forward" when the server's branch has diverged.) Anything only on the
+            #    server is saved first; untracked files (.env, Data/, Model/) are not touched.
             if [ -f .env ]; then cp .env ../hand-sign-recognition.env.backup; fi
-            git pull origin main
+            git fetch origin main
+            STAMP=$(date +%Y%m%d-%H%M%S)
+            if ! git merge-base --is-ancestor HEAD origin/main; then
+              git branch "server-backup-$STAMP" HEAD
+              echo "Server had commits that are not on GitHub: saved as branch server-backup-$STAMP"
+            fi
+            if ! git diff --quiet HEAD; then
+              git diff HEAD > "../server-changes-$STAMP.patch"
+              echo "Server had uncommitted edits: saved to ../server-changes-$STAMP.patch"
+            fi
+            # Forced: local edits were saved above. Also switches back to main if needed.
+            git checkout -f -B main origin/main
             if [ ! -f .env ] && [ -f ../hand-sign-recognition.env.backup ]; then
               cp ../hand-sign-recognition.env.backup .env
               echo "Restored .env from backup"
